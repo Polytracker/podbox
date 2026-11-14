@@ -62,10 +62,12 @@
 #define AB_LINES_MAX  1024
 #define AB_BANNER_MAX 240          /* tallest banner drawn, in pixels */
 #define AB_FADE       64           /* rows at the banner's foot that fade */
-#define AB_STEP       12           /* pixels per wheel click, at rest */
-#define AB_ACCEL_MAX  10           /* each adds half a step */
-#define AB_FRICTION   10           /* a tick keeps 1 - 1/this of the speed */
-#define AB_SPEED_MAX  (30 * 256)   /* pixels a tick, in 256ths */
+#define AB_STEP       8            /* pixels per wheel click, at rest */
+#define AB_ACCEL_MAX  14           /* each adds half a step */
+/* The 6G's panel tears: each frame shows a seam as wide as that frame's
+ * move, and nothing can be waited on to avoid it. Small moves at a high
+ * frame rate keep the seam to a few pixels. */
+#define AB_GLIDE_MAX  6            /* most pixels the page moves a frame */
 #define AB_BAR_W      3
 
 /* Blurred Art: Scrim's Now Playing backdrop. `scrim` brings the picture's
@@ -110,9 +112,7 @@ static struct
     int nlines;
     struct bitmap banner;      /* .data NULL with no banner */
     int height;                /* of the whole page */
-    int pos;                   /* scroll offset */
-    int sub, speed;            /* 256ths of a pixel past pos, and per tick */
-    long moved;                /* tick the glide last moved at */
+    int pos, target;           /* scroll offset, and where it is heading */
     bool found;
     bool notes;                /* liner notes rather than a bio */
     bool playing;              /* for the playing track: Right swaps page */
@@ -719,10 +719,8 @@ static void ab_draw(void)
 
 /* ---- scrolling -------------------------------------------------------- */
 
-/* One wheel click gives the page a push that friction then spends, so the
- * clicks of a turn run together into one glide. Clicks close together push
- * harder, so a quick turn crosses a long bio and a slow one reads line by
- * line; a click the other way stops the page first. */
+/* One wheel click. Clicks close together go further each time, so a quick
+ * turn crosses a long bio and a slow one reads line by line. */
 static void ab_scroll(int dir)
 {
     static long last;
@@ -735,37 +733,20 @@ static void ab_scroll(int dir)
     last = current_tick;
     last_dir = dir;
 
-    if (ab.speed && (ab.speed > 0) != (dir > 0))
-        ab.speed = 0;
-    if (!ab.speed)
-        ab.moved = current_tick;
-    /* the friction spends a push of v over AB_FRICTION ticks' worth */
-    ab.speed += dir * (AB_STEP + accel * AB_STEP / 2) * 256 / AB_FRICTION;
-    ab.speed = MAX(-AB_SPEED_MAX, MIN(ab.speed, AB_SPEED_MAX));
+    ab.target += dir * (AB_STEP + accel * AB_STEP / 2);
+    ab.target = MAX(0, MIN(ab.target, ab_max_pos()));
 }
 
-/* Moves the page on by the ticks since the last frame, so it keeps the same
- * pace however long a frame takes to draw. Stops at either end. */
+/* A quarter of the way to the target each frame, at least a pixel and at
+ * most AB_GLIDE_MAX */
 static void ab_glide(void)
 {
-    int ticks = MIN(current_tick - ab.moved, HZ / 10);
-    int at = ab.pos * 256 + ab.sub, end = ab_max_pos() * 256;
+    int diff = ab.target - ab.pos;
+    int move = diff / 4;
 
-    ab.moved = current_tick;
-    while (ticks-- > 0 && ab.speed)
-    {
-        at += ab.speed;
-        ab.speed -= ab.speed / AB_FRICTION;
-        if (ab.speed > -64 && ab.speed < 64)    /* under a quarter pixel */
-            ab.speed = 0;
-        if (at <= 0 || at >= end)
-        {
-            at = MAX(0, MIN(at, end));
-            ab.speed = 0;
-        }
-    }
-    ab.pos = at / 256;
-    ab.sub = at % 256;
+    if (!move)
+        move = diff > 0 ? 1 : -1;
+    ab.pos += MAX(-AB_GLIDE_MAX, MIN(move, AB_GLIDE_MAX));
 }
 
 /* Right, on the playing track's page: the bio and the album's notes swap.
@@ -779,7 +760,7 @@ static void ab_swap(void)
         return;
     ab_close();
     ab.notes = notes;
-    ab.pos = ab.sub = ab.speed = 0;
+    ab.pos = ab.target = 0;
     ab_open();
     ab_draw();
 }
@@ -801,8 +782,8 @@ static int ab_menu(void)
     viewportmanager_theme_undo(SCREEN_MAIN, false);
 
     ab_open();
-    ab.pos = MIN(ab.pos, ab_max_pos());
-    ab.sub = ab.speed = 0;
+    ab.target = MIN(ab.target, ab_max_pos());
+    ab.pos = ab.target;
     ab_draw();
     return ret;
 }
@@ -815,7 +796,7 @@ static int ab_run(void)
     ab.text_handle = ab.banner_handle = ab.backdrop_handle = 0;
     ab.backdrop = NULL;
     ab.loaded[0] = ab.loaded[1] = ab.loaded[2] = ab.loaded[3] = -1;
-    ab.pos = ab.sub = ab.speed = 0;
+    ab.pos = ab.target = 0;
 
     push_current_activity(ACTIVITY_ARTISTBIO);
     viewportmanager_theme_enable(SCREEN_MAIN, false, &ab.vp);
@@ -826,7 +807,7 @@ static int ab_run(void)
     {
         int action, timeout = HZ;
 
-        if (ab.speed)
+        if (ab.pos != ab.target)
         {
             ab_glide();
             ab_draw();
