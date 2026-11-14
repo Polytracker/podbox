@@ -1650,6 +1650,17 @@ void dynamic_colors_check_extraction(int aa_slot)
         if (current_tick - cache.track_change_tick > NO_ART_TIMEOUT)
             needs_extraction = false;
     }
+    else if (!(audio_status() & AUDIO_STATUS_PLAY))
+    {
+        /* Nothing playing, which is not a track without art. This is where
+         * boot lands: settings_apply_skins() asks for an extraction before
+         * dynamic_colors_seed_resume() runs, and with no track there is
+         * nothing to extract from. Keep the palette -- the seeded one, or
+         * the last track's -- since reverting would also clear
+         * resume_art_hash, and the next boot would have nothing to seed
+         * from. A track starting asks again. */
+        needs_extraction = false;
+    }
     else
     {
         /* Neither a cached thumbnail nor a buffered bitmap. Art may still be
