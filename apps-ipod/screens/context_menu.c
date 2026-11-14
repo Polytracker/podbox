@@ -69,6 +69,7 @@
 #include "files/filetypes.h"
 #include "viewers/image_viewer/image_viewer_pub.h"
 #include "viewers/lyric_viewer/lyric_viewer.h"
+#include "viewers/artist_bio/artist_bio.h"
 #include "viewers/properties.h"
 #include "viewers/playing_time.h"
 #include "files/file_ops.h"
@@ -243,6 +244,99 @@ static int lyrics_run(void)
 
 MENUITEM_FUNCTION(lyrics_item, 0, ID2P(LANG_LYRICS),
                   lyrics_run, NULL, Icon_NOICON);
+
+/* The same pair for the artist bio */
+static int view_artist_bio(void)
+{
+    if (artist_bio() == GO_TO_ROOT)
+        return ONPLAY_MAINMENU;
+    return ONPLAY_OK;
+}
+
+static int artist_bio_run(void)
+{
+    if (artist_bio() == GO_TO_ROOT)
+        context_menu_result = ONPLAY_MAINMENU;
+    return 0;
+}
+
+MENUITEM_FUNCTION(artist_bio_item, 0, ID2P(LANG_ARTIST_BIO),
+                  artist_bio_run, NULL, Icon_NOICON);
+
+/* The same screen for an artist or album chosen in a Music list rather than
+ * playing: the album's artist, for an album */
+static int artist_bio_row_run(void)
+{
+    char name[MAX_PATH];
+
+    if (!browser_db_current_artist_name(name, sizeof(name)))
+        return 0;
+    if (artist_bio_of(name) == GO_TO_ROOT)
+        context_menu_result = ONPLAY_MAINMENU;
+    return 0;
+}
+
+static int artist_bio_row_callback(int action,
+                                   const struct menu_item_ex *this_item,
+                                   struct gui_synclist *this_list)
+{
+    (void)this_item;
+    (void)this_list;
+    if (action == ACTION_REQUEST_MENUITEM
+        && (selected_file.context != CONTEXT_ID3DB
+            || browser_db_current_scope() == BROWSER_DB_SCOPE_NONE))
+        return ACTION_EXIT_MENUITEM;
+    return action;
+}
+
+MENUITEM_FUNCTION(artist_bio_row_item, 0, ID2P(LANG_ARTIST_BIO),
+                  artist_bio_row_run, artist_bio_row_callback, Icon_NOICON);
+
+/* Liner notes: the same screen for the playing album, or an album row's */
+static int view_liner_notes(void)
+{
+    if (liner_notes() == GO_TO_ROOT)
+        return ONPLAY_MAINMENU;
+    return ONPLAY_OK;
+}
+
+static int liner_notes_run(void)
+{
+    if (liner_notes() == GO_TO_ROOT)
+        context_menu_result = ONPLAY_MAINMENU;
+    return 0;
+}
+
+MENUITEM_FUNCTION(liner_notes_item, 0, ID2P(LANG_LINER_NOTES),
+                  liner_notes_run, NULL, Icon_NOICON);
+
+static int liner_notes_row_run(void)
+{
+    char artist[MAX_PATH], album[MAX_PATH];
+
+    if (!browser_db_current_artist_name(artist, sizeof(artist)))
+        artist[0] = '\0';
+    browser_db_current_entry_name(album, sizeof(album));
+    if (liner_notes_of(artist, album) == GO_TO_ROOT)
+        context_menu_result = ONPLAY_MAINMENU;
+    return 0;
+}
+
+static int liner_notes_row_callback(int action,
+                                    const struct menu_item_ex *this_item,
+                                    struct gui_synclist *this_list)
+{
+    (void)this_item;
+    (void)this_list;
+    if (action == ACTION_REQUEST_MENUITEM
+        && (selected_file.context != CONTEXT_ID3DB
+            || browser_db_current_scope() != BROWSER_DB_SCOPE_ALBUM))
+        return ACTION_EXIT_MENUITEM;
+    return action;
+}
+
+MENUITEM_FUNCTION(liner_notes_row_item, 0, ID2P(LANG_LINER_NOTES),
+                  liner_notes_row_run, liner_notes_row_callback, Icon_NOICON);
 
 MENUITEM_FUNCTION(wps_view_cur_playlist_item, 0, ID2P(LANG_VIEW_DYNAMIC_PLAYLIST),
                   wps_view_cur_playlist, NULL, Icon_NOICON);
@@ -2437,6 +2531,8 @@ MAKE_ONPLAYMENU_TITLED( wps_context_menu,
            &go_to_album_item, &go_to_artist_item,
            &go_to_podcast_item, &go_to_audiobook_item, &go_to_author_item,
            &lyrics_item,
+           &artist_bio_item,
+           &liner_notes_item,
            &sleep_timer_item,
            &wps_speed_item,
            &sound_mix_item,
@@ -2463,6 +2559,8 @@ MAKE_ONPLAYMENU_TITLED( browser_context_menu,
            &rating_item, &album_rating_item,
            &go_to_album_item, &go_to_artist_item,
            &go_to_podcast_item, &go_to_audiobook_item, &go_to_author_item,
+           &artist_bio_row_item,
+           &liner_notes_row_item,
            &properties_item, &track_info_item,
            &clipboard_paste_item,
            &more_menu,
@@ -2687,6 +2785,18 @@ static const struct hotkey_assignment hotkey_items[] = {
     { .action = HOTKEY_LYRICS,
       .lang_id = LANG_LYRICS,
       .func = HOTKEY_FUNC(view_lyrics, NULL),
+      .return_code = ONPLAY_FUNC_RETURN,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_NOSBS,
+      .icon = Icon_NOICON },
+    { .action = HOTKEY_LINER_NOTES,
+      .lang_id = LANG_LINER_NOTES,
+      .func = HOTKEY_FUNC(view_liner_notes, NULL),
+      .return_code = ONPLAY_FUNC_RETURN,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_NOSBS,
+      .icon = Icon_NOICON },
+    { .action = HOTKEY_ARTIST_BIO,
+      .lang_id = LANG_ARTIST_BIO,
+      .func = HOTKEY_FUNC(view_artist_bio, NULL),
       .return_code = ONPLAY_FUNC_RETURN,
       .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_NOSBS,
       .icon = Icon_NOICON },
@@ -3095,7 +3205,9 @@ MAKE_ONPLAYMENU_TITLED( item_menu,
 static const short now_playing_rows[] = {
     LANG_SHUFFLE, LANG_REPEAT, LANG_MENU_SET_RATING, LANG_GO_TO_ALBUM,
     LANG_GO_TO_ARTIST, LANG_GO_TO_PODCAST, LANG_GO_TO_AUDIOBOOK,
-    LANG_GO_TO_AUTHOR, LANG_LYRICS, LANG_SLEEP_TIMER, LANG_SOUND_MIX,
+    LANG_GO_TO_AUTHOR, LANG_LYRICS, LANG_ARTIST_BIO, LANG_LINER_NOTES,
+    LANG_SLEEP_TIMER,
+    LANG_SOUND_MIX,
     LANG_SPIKE_PLAY, LANG_CURRENT_PLAYLIST, LANG_ADD_TO_PL, LANG_THEME_OPTIONS,
     LANG_SHOW_IN_FILES,
     LANG_VIEW_ALBUMART, LANG_WINDDOWN, LANG_BOOKMARK_MENU, LANG_BROWSE_CUESHEET,
@@ -3112,11 +3224,12 @@ static const short track_rows[] = {
 static const short album_rows[] = {
     LANG_ADD_TO_PL, LANG_SOUND_MIX, LANG_MENU_SET_ALBUM_RATING,
     LANG_GO_TO_ARTIST, LANG_ADD_SHUFFLED, LANG_PLAY_LAST_SHUFFLED,
-    LANG_QUEUE_MENU, LANG_SOUND_ALBUM, LANG_LISTEN_PROGRESS,
-    LANG_SHOW_IN_FILES,
+    LANG_ARTIST_BIO, LANG_LINER_NOTES, LANG_QUEUE_MENU, LANG_SOUND_ALBUM,
+    LANG_LISTEN_PROGRESS, LANG_SHOW_IN_FILES,
 };
 static const short artist_rows[] = {
     LANG_ADD_TO_PL, LANG_ADD_SHUFFLED, LANG_PLAY_LAST_SHUFFLED,
+    LANG_ARTIST_BIO,
     LANG_QUEUE_MENU, LANG_LISTEN_PROGRESS, LANG_SHOW_IN_FILES,
 };
 static const short folder_rows[] = {

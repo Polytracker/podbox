@@ -365,6 +365,8 @@ static const struct tag_row tag_rows[] = {
 { "lyric highlight",          TAG_APPEARANCE,                    "lyrics words" },
 { "lyric backlight",          TAG_APPEARANCE|TAG_BATTERY,        "lyrics backlight" },
 { "lyric font",               TAG_APPEARANCE,                    "lyrics typeface" },
+{ "artist bio background",    TAG_APPEARANCE,                    "artist bio colors" },
+{ "artist bio banner",        TAG_APPEARANCE,                    "artist bio photo" },
 
 /* --- battery and power --------------------------------------------------- */
 { "backlight timeout",   TAG_BATTERY|TAG_APPEARANCE,             "backlight light screen timeout" },

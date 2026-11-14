@@ -194,7 +194,7 @@ Settings
 | Setting | What it does | Default | |
 |---|---|---|---|
 | Default Browser | Which browser the root and the now-playing screen return to: Music, Files or Playlists. | Music |  |
-| Select Action | What a press of Select does on the now-playing screen: go back to the previous screen as Menu Action does, or to the browser last used, to Music, Album Covers or Files, open the lyrics, the queue or Theme Options, or one of the now-playing menu's other actions. Theme Options says Unavailable when the theme has none. Holding Select always opens the now-playing menu. | Previous Browser | **Adv** |
+| Select Action | What a press of Select does on the now-playing screen: go back to the previous screen as Menu Action does, or to the browser last used, to Music, Album Covers or Files, open the lyrics, the artist bio, the liner notes, the queue or Theme Options, or one of the now-playing menu's other actions. Theme Options says Unavailable when the theme has none. Holding Select always opens the now-playing menu. | Previous Browser | **Adv** |
 | Select + Play Action | What pressing Select and Play together does on the now-playing screen: any of the actions Select offers, or the whole now-playing menu, or nothing. | Lyrics |  |
 | Menu Action | Where Menu goes from the now-playing screen. Previous Screen goes back to the list the music was started from, in the same place -- a Music list, Files, Playlists, Podcasts, the queue, Album Covers or Artist Portraits -- and Menu from there reaches the main menu. Music started anywhere else goes back to the main menu. Main Menu goes straight there. | Previous Screen |  |
 
@@ -444,7 +444,7 @@ Also reached as **Appearance** under `Settings > Playback > Now Playing Screen`.
 | Show Album Title | Whether the album name is drawn over the covers, and where. | Show Album and Artist at the Bottom |  |
 | Show Year in Album Title | Shows the release year in the caption, before or after the album's name. | No |  |
 | Background | Which colour fills the screen behind the covers: one of the theme's, which follows Dynamic Colours, or Custom, a colour of your own that stays put. Choosing Custom opens a colour picker; Custom Colour below it changes the colour later. The captions turn black or white to read on it. | Background Colour |  |
-| Custom Colour | The colour behind the carousel's covers while Background is Custom. Dynamic Colours leave it alone, and the captions turn black or white to read on it. | 000000 |  |
+| Custom Colour | The colour behind the screen while Background is Custom. Dynamic Colours leave it alone, and the text over it turns black or white to read on it. | 000000 |  |
 | Status Bar | Draws the status bar over the carousel. Off gives the covers the whole screen. | No |  |
 | View Mode | 3D angles the covers away on both sides. Flat lays them face-on and the same size, in two piles either side of the current one. | 3D |  |
 | 3D Centre Margin | The gap between the front cover and its neighbours in the 3D view. | 0 | **Adv** |
@@ -527,6 +527,9 @@ Shadow Colour only while there is a shadow to colour.
 | Lyrics Viewer ▸ Highlight Sung Words | Highlights individual words as they are sung, where the file carries word timings. Files with only line timings are unaffected. | Yes |  |
 | Lyrics Viewer ▸ Keep Backlight On | Holds the backlight on while lyrics are showing, so they can be followed without pressing a button. A track without lyrics goes dark as usual. Costs battery. | Yes |  |
 | Lyrics Viewer ▸ Font | A font used only by the lyrics screen. Unset uses the interface font. | — |  |
+| Artist Bio & Liner Notes ▸ Background | What sits behind Artist Bio and Liner Notes: the theme's colour, a Custom one of your own, or Blurred Art, the banner photo or cover blurred behind white text. Blurred Art, Darker takes a light picture further down, for crisper text. | Custom |  |
+| Artist Bio & Liner Notes ▸ Custom Colour | The colour behind the screen while Background is Custom. Dynamic Colours leave it alone, and the text over it turns black or white to read on it. | 000000 |  |
+| Artist Bio & Liner Notes ▸ Banner Photo | Shows the banner at the top of Artist Bio and Liner Notes -- the artist's photo, or the album's cover -- with the name over its foot. Off starts the page with the name. Blurred Art still uses the picture behind the text. | Yes |  |
 | Playback Report ▸ Artwork | Whether the report's cards show album and artist sleeves. A card without one draws a pattern instead. Off also gives the pictures' memory to the statistics, so on a very large library fewer rows are dropped. Changing it inside the report reads the log again, the same pause a change of year costs. | Yes |  |
 | Playback Report ▸ Top Rows | How many rows the Top Artists, Top Songs and Top Albums sections show. Ten is enough to see a shape without walking a long way; five is a podium and twenty-five is a survey. | 10 |  |
 | Playback Report ▸ Achievement Order | How the Achievements section is arranged. As Listed keeps the order the achievements were written in, which groups related ones together. Earned First puts what you have won at the front, Newest First orders those by when, and Closest First leads with whatever you are nearest to winning. | As Listed |  |

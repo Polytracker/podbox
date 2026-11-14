@@ -7096,6 +7096,38 @@ char *browser_db_current_entry_name(char *buf, size_t bufsize)
     return browser_db_get_entry_name(tc, tc->selected_item, buf, bufsize);
 }
 
+bool browser_db_current_artist_name(char *buf, size_t bufsize)
+{
+    struct tagentry *entry;
+    struct tagcache_album al;
+    long seek;
+    int n;
+
+    if (bufsize > 0)
+        buf[0] = '\0';
+    switch (browser_db_current_scope())
+    {
+        case BROWSER_DB_SCOPE_ARTIST:
+            browser_db_get_entry_name(tc, tc->selected_item, buf, bufsize);
+            return buf[0] != '\0';
+
+        case BROWSER_DB_SCOPE_ALBUM:
+            if (!(entry = browser_db_get_entry(tc, tc->selected_item)))
+                return false;
+            /* the artist chosen above the list, else the album's own */
+            seek = level_artist(tc->currextra);
+            if (seek < 0 && (n = tagcache_album_find_name(entry->extraseek)) >= 0
+                && tagcache_album_get(n, &al) && al.album_seek == entry->extraseek)
+                seek = al.artist_seek;
+            return seek >= 0
+                   && tagcache_seek_string(tag_albumartist, seek, buf, bufsize)
+                   && buf[0] != '\0';
+
+        default:
+            return false;
+    }
+}
+
 bool browser_db_current_filters(struct browser_db_filters *out)
 {
     struct tagentry *entry;

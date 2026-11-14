@@ -28096,3 +28096,115 @@
     *: "Previous Screen"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_ARTIST_BIO
+  desc: the artist bio screen: its now-playing menu row, hotkey and settings menu
+  user: core
+  <source>
+    *: "Artist Bio"
+  </source>
+  <dest>
+    *: "Artist Bio"
+  </dest>
+  <voice>
+    *: "Artist Bio"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_ARTIST_BIO_NONE
+  desc: artist bio screen, when no bio file matches the playing artist
+  user: core
+  <source>
+    *: "No bio for this artist"
+  </source>
+  <dest>
+    *: "No bio for this artist"
+  </dest>
+  <voice>
+    *: "No bio for this artist"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_ARTIST_BIO_BANNER
+  desc: in Artist Bio settings: draw the banner photo above the name
+  user: core
+  <source>
+    *: "Banner Photo"
+  </source>
+  <dest>
+    *: "Banner Photo"
+  </dest>
+  <voice>
+    *: "Banner Photo"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_ARTIST_BIO_BG_BLURRED
+  desc: Artist Bio and Liner Notes background: the banner photo or cover, blurred
+  user: core
+  <source>
+    *: "Blurred Art"
+  </source>
+  <dest>
+    *: "Blurred Art"
+  </dest>
+  <voice>
+    *: "Blurred Art"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES
+  desc: the liner notes screen: its now-playing and album menu rows and hotkey
+  user: core
+  <source>
+    *: "Liner Notes"
+  </source>
+  <dest>
+    *: "Liner Notes"
+  </dest>
+  <voice>
+    *: "Liner Notes"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_NONE
+  desc: liner notes screen, when no notes file matches the album
+  user: core
+  <source>
+    *: "No liner notes for this album"
+  </source>
+  <dest>
+    *: "No liner notes for this album"
+  </dest>
+  <voice>
+    *: "No liner notes for this album"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BIO_NOTES_MENU
+  desc: Settings > Appearance > Viewers: the shared Artist Bio and Liner Notes settings
+  user: core
+  <source>
+    *: "Artist Bio & Liner Notes"
+  </source>
+  <dest>
+    *: "Artist Bio & Liner Notes"
+  </dest>
+  <voice>
+    *: "Artist Bio & Liner Notes"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_ARTIST_BIO_BG_BLURRED_DARK
+  desc: Artist Bio and Liner Notes background: the blurred banner, taken darker
+  user: core
+  <source>
+    *: "Blurred Art, Darker"
+  </source>
+  <dest>
+    *: "Blurred Art, Darker"
+  </dest>
+  <voice>
+    *: "Blurred Art, Darker"
+  </voice>
+</phrase>

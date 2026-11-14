@@ -87,3 +87,43 @@ image named after the track, or `cover.jpg` or `folder.jpg` in the track's folde
 audiobook in a folder named after its author skips that folder's image, as above. Several
 books loose in one folder all show the folder's image here, so name each one's image after
 the book.
+
+## Artist bios
+
+`Artist Bio` in the now-playing menu (hold Select) shows a page about the playing artist:
+a banner photo, the name, their dates and a biography. In Music, the menu of an artist, or
+of one of their albums, has it too. Turn the wheel to scroll, and press
+Menu to go back; hold Menu for its settings. The page comes from two files in
+`Artwork/Bios`, named after the artist the same way as `People`:
+
+```text
+Artwork
+└── Bios
+    ├── Radiohead.txt
+    └── Radiohead.jpg
+```
+
+The `.txt` is UTF-8 text: the name on the first line, a dates line on the second (it can be
+left empty), a blank line, then the biography, a paragraph to a line. The `.jpg` is the
+banner, 320 pixels wide and 160 tall; its lower part fades into the background under the
+name. Without it the page starts with the name. The album artist's bio is shown, or the
+artist's when the album artist has none. The `ipod-artist-photos` tool writes both files.
+
+## Liner notes
+
+`Liner Notes`, next to `Artist Bio` in the now-playing menu and in the menu of an album in
+Music, is the same kind of page for the album: its cover as the banner, the title, a line
+of facts and its notes. Opened from the now-playing menu, either page swaps to the other
+with Right: the artist's bio and the playing album's notes. Right does nothing when the
+track has no album. The files are in `Artwork/Notes`, named `<Album Artist> - <Album>`:
+
+```text
+Artwork
+└── Notes
+    ├── Radiohead - OK Computer.txt
+    └── Radiohead - OK Computer.jpg
+```
+
+The `.txt` is laid out as for a bio. A paragraph starting with `# ` is drawn small and grey,
+for a heading, the critics' scores or the source. Both pages share their settings, under
+Settings > Appearance > Viewers > Artist Bio & Liner Notes.

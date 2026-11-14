@@ -264,6 +264,7 @@ screens/settings/general_settings.c
 screens/settings/sound_settings.c
 screens/settings/text_viewer_settings.c
 screens/settings/lyric_viewer_settings.c
+screens/settings/artist_bio_settings.c
 screens/settings/theme_settings.c
 screens/settings/theme_options_menu.c
 #ifdef HAVE_TAGCACHE
@@ -283,6 +284,10 @@ viewers/text_reel.c
  * plugin); lyric_viewer.c is the screen that draws them. */
 viewers/lyric_viewer/lyrics.c
 viewers/lyric_viewer/lyric_viewer.c
+
+/* The playing artist's bio, from the files the PC tool writes into
+ * /Artwork/Bios. */
+viewers/artist_bio/artist_bio.c
 
 /* Streaming text-extraction engine behind the core-linked text viewer. Turns
  * plain/markdown/html/rtf/fb2/epub/docx/pdf into a stream of UTF-8. Platform

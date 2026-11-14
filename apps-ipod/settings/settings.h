@@ -959,6 +959,10 @@ struct user_settings
     int lyric_anim;               /* 0 off, else the slide in ms */
     bool lyric_highlight;         /* light words as they are sung */
     bool lyric_backlight;         /* hold the backlight on */
+    /* Artist bio screen (apps-ipod/viewers/artist_bio). */
+    int  artist_bio_background;   /* ARTIST_BIO_BG_* */
+    int  artist_bio_custom_color; /* ...when that is ARTIST_BIO_BG_CUSTOM */
+    bool artist_bio_banner;       /* draw the banner photo */
     /* Spun (apps-ipod/viewers/playback_viewer). */
     bool spun_artwork;            /* draw sleeves on the cards that have one */
     int  spun_top_count;          /* rows a top-N section shows */

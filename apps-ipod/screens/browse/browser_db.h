@@ -163,6 +163,11 @@ bool browser_db_album_header(struct browser_context *c,
 /* The selected row's name, as it reads on screen. */
 char *browser_db_current_entry_name(char *buf, size_t bufsize);
 
+/* The album artist of the selected row: an artist row's own name, or an
+ * album row's artist. False where the row is neither, or the artist is not
+ * known. */
+bool browser_db_current_artist_name(char *buf, size_t bufsize);
+
 /* Levels a browse can be deep, which is the ceiling on the filters below. */
 #define BROWSER_DB_MAX_TAGS 5
 

@@ -1290,6 +1290,16 @@ battery.
 [lyric font]
 A font used only by the lyrics screen. Unset uses the interface font.
 
+[artist bio background]
+What sits behind Artist Bio and Liner Notes: the theme's colour, a Custom one
+of your own, or Blurred Art, the banner photo or cover blurred behind white
+text. Blurred Art, Darker takes a light picture further down, for crisper text.
+
+[artist bio banner]
+Shows the banner at the top of Artist Bio and Liner Notes -- the artist's photo,
+or the album's cover -- with the name over its foot. Off starts the page with
+the name. Blurred Art still uses the picture behind the text.
+
 [backlight timeout]
 How long the backlight stays on after the last button press. The single biggest
 lever on battery life.
@@ -1402,8 +1412,8 @@ Playlists.
 [wps select action]
 What a press of Select does on the now-playing screen: go back to the
 previous screen as Menu Action does, or to the browser last used, to Music,
-Album Covers or Files, open the lyrics, the queue or Theme Options, or one
-of the now-playing menu's other actions. Theme Options says Unavailable when
+Album Covers or Files, open the lyrics, the artist bio, the liner notes, the
+queue or Theme Options, or one of the now-playing menu's other actions. Theme Options says Unavailable when
 the theme has none. Holding Select always opens the now-playing menu.
 
 [context_wps]
@@ -1791,8 +1801,8 @@ Removes the background image, leaving the background colour showing through.
 The backdrop comes back the next time a theme is loaded.
 
 [action: Custom Colour]
-The colour behind the carousel's covers while Background is Custom. Dynamic
-Colours leave it alone, and the captions turn black or white to read on it.
+The colour behind the screen while Background is Custom. Dynamic Colours leave
+it alone, and the text over it turns black or white to read on it.
 
 [action: Foreground Colour]
 The default text colour for lists and menus.

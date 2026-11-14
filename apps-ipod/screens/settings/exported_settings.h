@@ -25,6 +25,7 @@ extern const struct menu_item_ex
                                        Appearance */
         , text_viewer_menu          /* text_viewer_settings.c */
         , lyric_viewer_menu         /* lyric_viewer_settings.c */
+        , artist_bio_menu           /* artist_bio_settings.c */
         , spun_menu                 /* spun_settings.c */
         , wps_settings              /* general_settings.c -- shown under
                                        Playback, defined beside the browser and
