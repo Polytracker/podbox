@@ -1985,8 +1985,11 @@ const struct settings_list settings[] = {
      * this and the next, so neither takes effect until it is chosen: live,
      * each value scrolled past recolours the whole screen under the open
      * option list, and a turn from light to dark leaves it drawn wrongly. */
-    OFFON_SETTING(F_THEMERESET|F_TEMPVAR, dynamic_colors,
-                  LANG_DYNAMIC_COLORS, false, "dynamic colors", NULL),
+    CHOICE_SETTING(F_THEMERESET|F_TEMPVAR, dynamic_colors,
+                   LANG_DYNAMIC_COLORS, DYNAMIC_COLORS_OFF, "dynamic colors",
+                   "off,nowplaying,on", NULL, 3,
+                   ID2P(LANG_OFF), ID2P(LANG_DYNAMIC_COLORS_NOW_PLAYING),
+                   ID2P(LANG_DYNAMIC_COLORS_EVERYWHERE)),
     /* A light theme sets `light` so an album never turns it dark. */
     CHOICE_SETTING(F_THEMERESET|F_TEMPVAR, dynamic_colors_background,
                    LANG_DYNAMIC_COLORS_BACKGROUND, DYNAMIC_BG_AUTO,

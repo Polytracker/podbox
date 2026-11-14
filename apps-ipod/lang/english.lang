@@ -27746,3 +27746,37 @@
     *: "Unassign Button"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_DYNAMIC_COLORS_NOW_PLAYING
+  desc: in Colours settings: Dynamic Colors choice, album colours on Now Playing and its viewers only
+  user: core
+  <source>
+    *: none
+    lcd_color: "Now Playing Only"
+  </source>
+  <dest>
+    *: none
+    lcd_color: "Now Playing Only"
+  </dest>
+  <voice>
+    *: none
+    lcd_color: "Now Playing Only"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_DYNAMIC_COLORS_EVERYWHERE
+  desc: in Colours settings: Dynamic Colors choice, album colours on every screen
+  user: core
+  <source>
+    *: none
+    lcd_color: "Everywhere"
+  </source>
+  <dest>
+    *: none
+    lcd_color: "Everywhere"
+  </dest>
+  <voice>
+    *: none
+    lcd_color: "Everywhere"
+  </voice>
+</phrase>

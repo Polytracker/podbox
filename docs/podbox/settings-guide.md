@@ -380,7 +380,7 @@ after new music, run it after `database_pb.exe`.
 
 | Setting | What it does | Default | |
 |---|---|---|---|
-| Dynamic Colors | Recolours the interface from the artwork of whatever is playing. A skin not written for it will look wrong, since it cannot know what its colours will become. | No |  |
+| Dynamic Colors | Recolours the interface from the artwork of whatever is playing. A skin not written for it will look wrong, since it cannot know what its colours will become. Now Playing Only keeps the album's colours to Now Playing, Album Covers and Lyrics; the menus keep the theme's. Scrim also leaves the blurred cover out of its menus. | Off |  |
 | Dynamic Colors Background | Which of the album's two colours becomes the background. Auto takes the one the artwork has most of; Light and Dark always take the lighter or the darker. Light keeps a light theme light whatever is playing; the text is then the darker colour, which may be harder to read where a skin draws it over the art. | Auto |  |
 | Foreground Colour | The colour of text and lines. Reset by loading a theme. | e7f3ef |  |
 | Background Colour | The colour behind them. Reset by loading a theme. | 000c21 |  |

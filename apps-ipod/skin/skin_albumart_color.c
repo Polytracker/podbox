@@ -70,6 +70,7 @@
 #include "draw/img_filter.h"
 #include "skin_engine.h"             /* SKINNABLE_SCREENS_COUNT */
 #include "wps_internals.h"           /* struct skin_albumart */
+#include "system/activity.h"         /* Now Playing Only's screens */
 #include "skin_albumart_color.h"
 
 /* How long after a colour change the screens are asked to keep repainting.
@@ -1926,9 +1927,29 @@ static unsigned int resolve_word(unsigned int original, bool palette)
     return out;
 }
 
+/* Whether the screen on display takes the album's colours. Now Playing Only
+ * keeps them to the player and the screens shown with it; everywhere else
+ * resolves as if the setting were off. Extraction runs either way, so the
+ * palette is ready when the player comes back. */
+static bool palette_here(void)
+{
+    if (global_settings.dynamic_colors != DYNAMIC_COLORS_NOW_PLAYING)
+        return global_settings.dynamic_colors == DYNAMIC_COLORS_EVERYWHERE;
+
+    switch (get_current_activity())
+    {
+        case ACTIVITY_WPS:
+        case ACTIVITY_ALBUMCOVERS:
+        case ACTIVITY_LYRICS:
+            return true;
+        default:
+            return false;
+    }
+}
+
 unsigned int dynamic_colors_resolve(unsigned int original)
 {
-    bool palette = global_settings.dynamic_colors && cache.valid;
+    bool palette = palette_here() && cache.valid;
 
     /* Before the checks below, not after: the flag has to come off whether or
      * not there is a palette to resolve against, since this is the only place
@@ -1982,7 +2003,7 @@ bool dynamic_colors_roles(unsigned int *dominant, unsigned int *vivid)
 {
     unsigned int black = LCD_RGBPACK(0, 0, 0);
 
-    if (!global_settings.dynamic_colors || !cache.valid)
+    if (!palette_here() || !cache.valid)
         return false;
     *dominant = cache.dominant;
     if (cache.has_vivid)

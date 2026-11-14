@@ -18,7 +18,8 @@
 #
 # Album art, its highlights brought down until the list text reads. That text
 # is white in every Dynamic Colors Background mode, so the scrim is for white.
-%V(0,0,-,-,-)%VB%Vf(000000)%Vb(dominant<15:000000)%Cl(0,-40,320,320,c,c,blur12+scrim:ffffff+dither,-,blurred)%Cd(blurred)
+# Dynamic Colors' Now Playing Only keeps it to Album Covers (%cs 22).
+%V(0,0,-,-,-)%VB%Vf(000000)%Vb(dominant<15:000000)%Cl(0,-40,320,320,c,c,blur12+scrim:ffffff+dither,-,blurred)%?St(dynamic colors)<%Cd(blurred)|%?if(%cs,=,22)<%Cd(blurred)>|%Cd(blurred)>
 #
 # Background panels: a light wash of the album's background colour. The scrim
 # on the art is what makes the white and tinted rows read.

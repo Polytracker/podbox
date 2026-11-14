@@ -189,6 +189,16 @@ enum {
     SINGLE_MODE_PLAYLIST,
 };
 
+/* dynamic_colors: where the album's colours are used. Everywhere is the
+ * cfg's "on", so a theme or config written for the old on/off reads as it
+ * always did. */
+enum
+{
+    DYNAMIC_COLORS_OFF = 0,
+    DYNAMIC_COLORS_NOW_PLAYING,
+    DYNAMIC_COLORS_EVERYWHERE
+};
+
 /* dynamic_colors_background: which of the album's two colours is the
  * background -- as extracted, the lighter, or the darker. */
 enum
@@ -709,7 +719,7 @@ struct user_settings
     int lse_color; /* end color for the selector gradient */
     int lst_color; /* color of the text for the selector */
     unsigned char colors_file[MAX_FILENAME+1];
-    bool dynamic_colors; /* auto-color from album art */
+    int  dynamic_colors; /* DYNAMIC_COLORS_*: where album colours apply */
     int  dynamic_colors_background; /* DYNAMIC_BG_*: which of the pair it is */
 
     /* Filters applied to cached artwork as the carousel and the database
