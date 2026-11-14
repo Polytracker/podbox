@@ -46,6 +46,8 @@
 #                 Required on any branch but master.
 #   --no-sim      skip the simulator; leave the Simulator release as it is
 #   --no-voices   skip the voice files; leave the Voices release as it is
+#   --no-arcade   leave the Arcade's build action, game template and IDE
+#                 page as they are (release-arcade.sh publishes them)
 #
 # Requires: ssh to the build server (key-based, non-interactive), and `gh`
 # installed and authenticated THERE -- see the --repo note further down, and
@@ -143,6 +145,7 @@ DRAFT=
 DRY_RUN=
 WITH_SIM=1
 WITH_VOICES=1
+WITH_ARCADE=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -151,6 +154,7 @@ while [ $# -gt 0 ]; do
         --dry-run)  DRY_RUN=1 ;;
         --no-sim)   WITH_SIM= ;;
         --no-voices) WITH_VOICES= ;;
+        --no-arcade) WITH_ARCADE= ;;
         --server)   [ $# -ge 2 ] || die "--server needs user@host"
                     SERVER=$2; shift ;;
         --root)     [ $# -ge 2 ] || die "--root needs a path"
@@ -187,10 +191,14 @@ say "Checking the tree"
 sh tools/check-settings-docs.sh ||
     die "settings and their documents disagree -- see the lines above"
 
-UPSTREAM=$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null) ||
-    die "this branch has no upstream; push it before releasing"
-[ "$(git rev-parse HEAD)" = "$(git rev-parse '@{u}')" ] ||
-    die "HEAD differs from $UPSTREAM -- push first, so the tag names a published commit"
+# A rehearsal tags nothing, and builds from git archive, so it needs nothing
+# pushed: unpushed work can be rehearsed before it goes out.
+if [ -z "$DRY_RUN" ]; then
+    UPSTREAM=$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null) ||
+        die "this branch has no upstream; push it before releasing"
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse '@{u}')" ] ||
+        die "HEAD differs from $UPSTREAM -- push first, so the tag names a published commit"
+fi
 
 # The release belongs to whatever origin points at here. Derived rather than
 # hardcoded so a renamed fork doesn't silently publish to the wrong place.
@@ -514,6 +522,9 @@ for target in $TARGETS; do
                     .rockbox/trim.config \
                     .rockbox/speech/cmudict.bin \
                     .rockbox/games/font.bin \
+                    .rockbox/games/spike.pbg \
+                    .rockbox/games/musicquiz.pbg \
+                    .rockbox/games/brickmania.pbg \
                     .rockbox/langs/english.vstrings \
                     .rockbox/fonts/LICENSE-Noto.txt \
                     $TOOL_WANT \
@@ -655,6 +666,10 @@ scp "$SERVER:$REMOTE_DIR/$ALL_THEMES_ASSET" "dist/$ALL_THEMES_ASSET"
 scp "$SERVER:$REMOTE_DIR/$BOOT_ASSET" "dist/$BOOT_ASSET"
 
 if [ -n "$DRY_RUN" ]; then
+    # the Arcade's repositories made and checked from this build, as they
+    # would be published
+    [ -z "$WITH_ARCADE" ] || ./release-arcade.sh --server "$SERVER" \
+        --remote-dir "$REMOTE_DIR" --commit "$(git rev-parse HEAD)" --dry-run
     say "Dry run: built and verified, nothing published"
     echo "  zips in dist/"
     exit 0
@@ -827,3 +842,8 @@ say "Published $COMMIT as $RELEASE"
 echo "  https://github.com/$SLUG/releases/tag/$RELEASE"
 
 echo "  local copies in dist/"
+
+# The Arcade's side, from the same commit: published after the firmware,
+# so @latest never builds for a firmware not yet out
+[ -z "$WITH_ARCADE" ] || ./release-arcade.sh --server "$SERVER" \
+    --remote-dir "$REMOTE_DIR" --commit "$SHA"

@@ -12,7 +12,7 @@
  *     and no path runs off the end;
  *   - every native exists in this firmware and suits the music level.
  *
- * tools/arcade/src/bytecode.js verify() is the reference: the same checks,
+ * arcade/sdk/src/bytecode.js verify() is the reference: the same checks,
  * and the compiler's tests run every cart they make through it.
  ***************************************************************************/
 #include <string.h>
@@ -78,13 +78,20 @@ static int size_of(int op)
     return n;
 }
 
+static uint32_t u16at(const uint8_t *p) { return p[0] | (p[1] << 8); }
+
 static int is_jump(int op)
 {
     return op == OP_JMP || op == OP_JF || op == OP_JT ||
-        op == OP_ANDJ || op == OP_ORJ || (op >= OP_JLT && op <= OP_JNE);
+        op == OP_ANDJ || op == OP_ORJ || (op >= OP_JLT && op <= OP_JNE) ||
+        (op >= OP_JLTLI && op <= OP_JGELI);
 }
 
-static uint32_t u16at(const uint8_t *p) { return p[0] | (p[1] << 8); }
+/* A jump's offset, its last operand, from the end of the instruction */
+static int32_t offset_of(const uint8_t *p)
+{
+    return (int16_t)u16at(p + size_of(p[0]) - 2);
+}
 
 /* Stack effect of the instruction at p; 0 when an operand is invalid. */
 static int effect(struct vm *vm, const uint8_t *p, int *pops, int *pushes)
@@ -145,6 +152,13 @@ static int operands_ok(struct vm *vm, const struct fninfo *f,
         return p[1] < f->nlocals;
     case OP_LDG: case OP_STG:
         return u16at(p + 1) < vm->nglobals;
+    case OP_GETGL:
+        return u16at(p + 1) < vm->nglobals && p[3] < f->nlocals;
+    case OP_GETGP:
+        return u16at(p + 1) < vm->nglobals && u16at(p + 3) < vm->nstrings &&
+            u16at(p + 5) < vm->nic;
+    case OP_JLTLI: case OP_JLELI: case OP_JGTLI: case OP_JGELI:
+        return p[1] < f->nlocals;
     case OP_PUSHS:
         return u16at(p + 1) < vm->nstrings;
     case OP_PUSHFN:
@@ -193,8 +207,7 @@ static int verify_fn(struct vm *vm, uint32_t fi, uint8_t *scratch,
     for (pc = 0; pc < len; pc++) {
         if (!start[pc] || !is_jump(code[pc]))
             continue;
-        int32_t off = (int16_t)u16at(code + pc + 1);
-        int64_t t = (int64_t)pc + 3 + off;
+        int64_t t = (int64_t)pc + size_of(code[pc]) + offset_of(code + pc);
         if (t < 0 || t >= len || !start[t])
             return vm_fail(vm, "this game file is damaged: ", "jump", "");
     }
@@ -222,7 +235,7 @@ static int verify_fn(struct vm *vm, uint32_t fi, uint8_t *scratch,
         uint32_t to[2];
         int hs[2], nto = 0;
         if (is_jump(p[0])) {
-            to[nto] = (uint32_t)((int32_t)next + (int16_t)u16at(p + 1));
+            to[nto] = (uint32_t)((int32_t)next + offset_of(p));
             hs[nto++] = (p[0] == OP_ANDJ || p[0] == OP_ORJ) ? h : after;
         }
         if (p[0] != OP_JMP) {
@@ -254,7 +267,7 @@ int verify_cart(struct vm *vm)
     uint32_t room = vm->size - base;
     if (vm->entry[1] == NONE || vm->entry[2] == NONE)
         return vm_fail(vm, "this game file is damaged: ", "entries", "");
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 5; i++)
         if (vm->entry[i] != NONE && vm->entry[i] >= vm->nfns)
             return vm_fail(vm, "this game file is damaged: ", "entries", "");
     for (uint32_t i = 0; i < vm->nfns; i++)

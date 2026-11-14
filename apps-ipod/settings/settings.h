@@ -19,6 +19,7 @@
 #include "audiohw.h" /* for the AUDIOHW_* defines */
 #include "skin/statusbar.h" /* for the statusbar values */
 #include "screens/playback/quick_screen.h"
+#include "skin/theme_options.h" /* THEME_OPTION_KEY_MAX */
 #include "button.h"
 #include "audio.h"
 #include "dsp_proc_settings.h"
@@ -307,8 +308,9 @@ enum { SCROLLBAR_OFF = 0, SCROLLBAR_LEFT, SCROLLBAR_RIGHT };
 enum { AUTORESUME_NEXTTRACK_NEVER = 0, AUTORESUME_NEXTTRACK_ALWAYS,
        AUTORESUME_NEXTTRACK_CUSTOM};
 
-/* Menu Action: back to the screen playback started from, or the root */
-enum { WPS_MENU_PREVIOUS = 0, WPS_MENU_ROOT };
+/* Go to Album Via: the Music list Now Playing's Go to Album opens under */
+enum { ALBUM_VIA_DIRECT = 0, ALBUM_VIA_ALBUM, ALBUM_VIA_ALBUMARTIST,
+       ALBUM_VIA_ARTIST, ALBUM_VIA_GENRE };
 
 /* Keyclick stuff */
 
@@ -561,7 +563,7 @@ struct user_settings
     int  beep;              /* system beep volume when changing tracks etc. */
     int  keyclick;          /* keyclick volume */
     int  keyclick_repeats;  /* keyclick on repeats */
-    bool dithering_enabled;
+    int  dithering_enabled; /* enum dither_modes */
 
 
     /* misc options */
@@ -597,7 +599,9 @@ struct user_settings
     int car_adapter_mode_delay; /* delay before resume,  in seconds*/
     int start_in_screen;
     int wps_select_action; /* a hotkey action, as item 0 -- see HK_CTX_SET */
-    int wps_menu_action;   /* where MENU leaves Now Playing for: WPS_MENU_ */
+    int wps_menu_action;   /* a hotkey action, as item 0 -- see HK_CTX_SET */
+    int wps_long_press_play_action; /* the same, for a long press of PLAY */
+    int go_to_album_via;   /* ALBUM_VIA_ */
     int ff_rewind_min_step; /* FF/Rewind minimum step size */
     int ff_rewind_accel; /* FF/Rewind acceleration (in seconds per doubling) */
 
@@ -695,12 +699,9 @@ struct user_settings
     int mix_length;           /* tracks in a generated playlist */
     bool continue_playing;    /* extend a playlist that runs out */
     bool mix_starts_with_selected; /* Play Similar/Wind Down lead with it */
-    bool quiz_title;          /* the Music Quiz's kinds of question */
-    bool quiz_artist;
-    bool quiz_album;
-    bool quiz_year;
 
     unsigned char backdrop_file[MAX_PATHNAME+1];  /* backdrop bitmap file */
+    unsigned char usb_image_file[MAX_PATHNAME+1]; /* the USB screen's image */
 
     int bg_color; /* background color native format */
     int fg_color; /* foreground color native format */
@@ -834,6 +835,10 @@ struct user_settings
     /* Artist art (a photo in <artist>/folder.jpg) on artist browse rows, same
      * mechanism as db_albumart. On by default. */
     bool db_artistart;
+    /* An artist with no photograph shows the artist's latest album cover
+     * instead of the placeholder: on their row, in Artist Portraits and as
+     * Now Playing's artist art. Off by default. */
+    bool db_artist_cover;
     /* Art on the book rows of an audiobook browse, overriding the two above
      * for those lists only -- tall rows are a different bargain over a few
      * dozen books than over a few thousand albums. Off by default. */
@@ -841,6 +846,9 @@ struct user_settings
     /* The same for the author rows, apart, since few people keep a photograph
      * of an author. Off by default. */
     bool db_authorart;
+    /* The same as db_artist_cover for an audiobook author, with their latest
+     * book's cover. Off by default. */
+    bool db_author_cover;
     bool db_ebookauthorart;
     /* Show art on the Podcasts lists. On by default: a podcatcher embeds the
      * show's art in every episode. */
@@ -1056,6 +1064,9 @@ struct user_settings
     bool keyclick_hardware; /* hardware piezo keyclick */
 
     char start_directory[MAX_PATHNAME+1];
+    /* The theme option Theme Toggle changes, as "key:path" of its
+       .preferences file; empty for none */
+    char theme_toggle[THEME_OPTION_KEY_MAX + 1 + MAX_PATHNAME + 1];
     /* Has the root been customized from the .cfg file? false = no, true = loaded from cfg */
     bool root_menu_customized;
     bool shortcuts_replaces_qs;
@@ -1081,14 +1092,6 @@ struct user_settings
     int usb_mode;
     int playback_log; /* 0=off, 1=generic (ROCKBOX_DIR/playback.log),
                          2=Audioscrobbler (/.scrobbler.log) */
-
-    /* Spike. The caption is a display preference and the offset is
-       calibration: both belong to the player rather than to the run, which
-       is why they are here and the tempo shift is not -- that one is per
-       track, and remembering it would be remembering it for the wrong
-       track. */
-    int spike_caption;  /* 0 off, 1 title, 2 title and artist */
-    bool spike_caption_scroll;  /* ...and whether it travels or is cropped */
 };
 
 /* global settings */

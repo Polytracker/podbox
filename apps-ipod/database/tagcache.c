@@ -1129,6 +1129,17 @@ static const char *row_name(int tag, long seek)
     return strcmp(name, UNTAGGED) ? name : NULL;
 }
 
+/* An artist's cover is its latest album's with art, the first on a tie */
+static void take_cover(struct tagcache_artist *ar,
+                       const struct tagcache_album *al)
+{
+    if (al->art_hash && (!ar->cover_hash || al->year > ar->cover_year))
+    {
+        ar->cover_hash = al->art_hash;
+        ar->cover_year = al->year;
+    }
+}
+
 /* Once every tag is in: what needs the genres, and the artists' figures */
 static void albums_finish(int entries)
 {
@@ -1192,6 +1203,19 @@ static void albums_finish(int entries)
         if (ar->art_hash == 0)
             ar->art_hash = art_name_hash(row_name(tag_albumartist, ar->seek));
         al->artist_art_hash = ar->art_hash;
+        if (db_spoken_album_kind(al) == 0)
+            take_cover(ar, al);
+    }
+
+    /* A book or podcast is an artist's cover only where no music is */
+    for (int r = 0; r < hdr->album_count; r++)
+    {
+        struct tagcache_album *al = &tcrc_albums[r];
+        int a = artist_row(al->artist_seek);
+
+        if (a >= 0 && db_spoken_album_kind(al) != 0
+            && tcrc_artists[a].albums == tcrc_artists[a].spoken_albums)
+            take_cover(&tcrc_artists[a], al);
     }
 }
 
@@ -3092,6 +3116,16 @@ bool tagcache_entry_numeric(int idx_id, int tag, long *value)
 
     *value = get_tag_numeric(entry, tag, idx_id);
     return true;
+}
+
+long tagcache_entry_seek(int idx_id, int tag)
+{
+    const struct index_entry *entry = ram_entry(idx_id);
+
+    if (!entry || tag < 0 || tag >= TAG_COUNT || TAGCACHE_IS_NUMERIC(tag)
+        || tag == tag_filename)
+        return -1;
+    return entry->tag_seek[tag];
 }
 
 bool tagcache_path_index_info(int *slots, int *found, int *missed)

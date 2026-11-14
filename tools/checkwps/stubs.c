@@ -94,10 +94,6 @@ int core_load_bmp(const char *filename, struct bitmap *bm, const int bmformat,
     return 1;
 }
 
-/* bmp.c reports each row to the image readers' progress hook, which lives in
- * resize.c; nothing here sets it. */
-bool (*image_row_hook)(int done, int rows);
-
 /* The parse buffer, which the parser asks the application layer for. Twice the
  * 5G's 512KB, because a parsed skin is about twice its size here: a 64-bit
  * host stores the parser's offsets as pointers, eight bytes where the player
@@ -340,7 +336,7 @@ void debug_log(enum debug_log_id id, const char *fmt, ...)
 }
 bool debug_log_enabled(enum debug_log_id id) { (void)id; return false; }
 void dsp_afr_enable(int var) { (void)var; }
-void dsp_dither_enable(bool enable) { (void)enable; }
+void dsp_dither_enable(int mode) { (void)mode; }
 void dsp_pbe_enable(int var) { (void)var; }
 void dsp_pbe_precut(int var) { (void)var; }
 void dsp_set_compressor(const struct compressor_settings *s) { (void)s; }

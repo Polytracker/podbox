@@ -512,6 +512,13 @@ const struct bitmap *browser_art_row(int selected_item, void *data,
      * to fit the tighter of the two or it is cropped. */
     int want = size ? MIN(size->width, size->height) : TREE_AA_MAX_DIM;
 
+    static unsigned seen_generation;
+    unsigned generation = art_cache_generation();
+    if (generation != seen_generation && !art_cache_is_busy())
+    {
+        browser_aa_reset();
+        seen_generation = generation;
+    }
     if (!browser_aa_ready(want))
         return NULL;
 
@@ -569,10 +576,26 @@ hit:
     return &browser_aa_bm;
 }
 
+/* An artist with no photograph takes their latest album's cover, and an
+ * author their latest book's, when asked; an album with no cover keeps the
+ * placeholder either way. */
 static unsigned int browser_row_art_hash(int selected_item, void *data)
 {
-    return browser_db_get_art_hash((struct browser_context *)data,
-                                   selected_item);
+    struct browser_context *c = (struct browser_context *)data;
+    unsigned int hash = browser_db_get_art_hash(c, selected_item);
+    unsigned int cover;
+    char aat[MAX_PATH];
+    bool is_fallback;
+
+    if (hash
+        && (browser_db_is_spoken_list(c) ? global_settings.db_author_cover
+                                         : global_settings.db_artist_cover)
+        && art_cache_lookup_hash(hash, browser_aa_size_idx, aat, sizeof(aat),
+                                 &is_fallback)
+        && is_fallback
+        && (cover = browser_db_get_artist_cover_hash(c, selected_item)))
+        hash = cover;
+    return hash;
 }
 
 static const struct bitmap *browser_get_albumart(int selected_item, void * data,
@@ -1284,6 +1307,14 @@ static int exit_to_new_screen(int screen)
     return screen;
 }
 
+/* Left and Menu both leave as GO_TO_ROOT; this tells them apart */
+static bool left_by_menu;
+
+bool browser_left_by_menu(void)
+{
+    return left_by_menu;
+}
+
 /* A Music menu row's long press. Hide is all it has: the row is not music. */
 static int music_row_menu(void)
 {
@@ -1579,6 +1610,7 @@ static int dirbrowse(void)
     char* currdir = tc.currdir; /* just a shortcut */
     bool id3db = *tc.dirfilter == SHOW_ID3DB;
 
+    left_by_menu = false;
     if (id3db)
         curr_context=CONTEXT_ID3DB;
     else
@@ -1691,7 +1723,6 @@ static int dirbrowse(void)
                     case GO_TO_FEATURED_ARTISTS:
                     case GO_TO_FEATURED_TRACKS:
                     case GO_TO_BOOK_SHELF:
-                    case GO_TO_MUSIC_QUIZ:
                     case GO_TO_LISTEN_STATS:
                     /* The file browser's and the catalogue's own Search rows
                      * (the FILE_ATTR_SEARCH case in browser_disk_enter()). */
@@ -1739,6 +1770,7 @@ static int dirbrowse(void)
                 break;
 
             case ACTION_STD_MENU:
+                left_by_menu = true;
                 return exit_to_new_screen(GO_TO_ROOT);
                 break;
 

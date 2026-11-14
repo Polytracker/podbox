@@ -19,6 +19,21 @@
 /* playback.sound()'s record: SOUND.SIZE in arcade_api.def */
 #define ARCADE_SOUND_FIELDS 31
 
+/* A cart's logo, its LOGO chunk: this many pixels a side */
+#define ARCADE_LOGO_SIZE 44
+
+/* The logo as 0xRRGGBB pixels, read from the LOGO and PALS chunks without
+ * loading the cart (pals NULL for a cart with none); 1 when it fitted in
+ * cap pixels, its size in w and h */
+int arcade_logo_rgb(const uint8_t *logo, uint32_t logo_len,
+                    const uint8_t *pals, uint32_t pals_len,
+                    uint32_t *rgb, uint32_t cap, int *w, int *h);
+
+/* tracks.near(): the most it gives for a track, and the most tracks a
+ * call takes */
+#define ARCADE_NEAR_MAX 64
+#define ARCADE_NEAR_IDS 10
+
 struct arcade_host
 {
     void *ctx;
@@ -73,6 +88,9 @@ struct arcade_host
      * (name) or ended (NULL); arcade_units_now() then times it. */
     void (*watch)(void *ctx, const char *name, const char *value);
     void (*prof)(void *ctx, const char *name);
+    /* n bytes of the cart file from byte at, for the maps and images it
+     * reads as it plays: how many it read. NULL where it cannot. */
+    uint32_t (*cart_read)(void *ctx, uint32_t at, void *buf, uint32_t n);
 };
 
 /* store.*: a cart's own JSON files, each name.json, in an area of its own.
@@ -134,6 +152,7 @@ struct arcade_filter
     const char *genre;          /* the genre's name, case aside */
     int32_t decade;             /* 1980 for the 80s */
     int music;                  /* spoken word left out */
+    const char *artist;         /* the artist's name, case aside */
 };
 
 /* The owner's music and library. A track is its id, the database's number
@@ -165,8 +184,12 @@ struct arcade_tracks
      * cap bytes with its end, 0 when there is none (ARCADE_TRACK_* below) */
     int (*field)(void *ctx, int32_t id, int f, int32_t *num, char *buf,
                  int cap);
-    /* tracks.near(): up to n tracks most like id, into out, the count */
-    int32_t (*near)(void *ctx, int32_t id, int32_t n, int32_t *out);
+    /* tracks.near(): for each of count ids, up to n tracks most like it
+     * into out, n a track, -1 after the last of each; the count found in
+     * all. By how they sound, nearest first, when sound is set. n is at
+     * most ARCADE_NEAR_MAX, count ARCADE_NEAR_IDS. */
+    int32_t (*near)(void *ctx, const int32_t *ids, int32_t count,
+                    int32_t n, int sound, int32_t *out);
     /* tracks.sound(): id's Sound Index record, as playback.sound() */
     int (*sound)(void *ctx, int32_t id, int32_t out[ARCADE_SOUND_FIELDS]);
     /* the queue: its length and the playing place (0 first, -1 none),
@@ -178,6 +201,14 @@ struct arcade_tracks
     /* the tracks the last count(), pick() or near() looked at, which
      * the call is charged for */
     int32_t (*walked)(void *ctx);
+    /* playback.colors(): the background, text and most vivid colours
+     * the player shows, 0xRRGGBB, into out; 1 when they are the playing
+     * album's (dynamic colours), 0 the theme's. NULL for none */
+    int (*colours)(void *ctx, uint32_t out[3]);
+    /* playback.volume() and adjust(): the owner's volume turned up or down
+     * steps of the player's own (0 leaves it), and then where it is, 0 to
+     * 100 of its range. NULL for none */
+    int32_t (*volume)(void *ctx, int32_t steps);
 };
 
 /* tracks.field()'s fields: TRACK.* in arcade_api.def */
@@ -256,6 +287,13 @@ int arcade_menu_is_game(const struct vm *vm);
  * skipped() reports. The rate can change at any tick (setrate()), so the
  * host reads arcade_rate() after each. */
 void arcade_skipped(struct vm *vm, unsigned frames);
+/* The game was paused, by the pause menu or the hold switch: what
+ * resumed() reports. */
+void arcade_paused(struct vm *vm);
+/* The owner's mute of the game's own sound (sfx and tone), kept with the
+ * options: arcade_audio() then mixes silence, its effects ending on time */
+void arcade_mute(struct vm *vm, int on);
+int arcade_muted(const struct vm *vm);
 const uint8_t *arcade_id(const struct vm *vm);
 
 /* The buttons for btn(): one bit each, in btn()'s numbering. */
@@ -288,10 +326,39 @@ int arcade_quit_asked(const struct vm *vm);
 
 /* Runs the cart's global setup, then init(). */
 int arcade_start(struct vm *vm);
+/* The cart closing: its ending(), once, if it has one, before the host
+ * writes its saves and any copy kept to carry on. 0 when it failed. */
+int arcade_end(struct vm *vm);
 /* One tick: update(), then draw() when draw is set and the cart has one. */
 int arcade_tick(struct vm *vm, int draw);
 /* Between ticks: collect garbage if enough has been allocated. */
 void arcade_idle(struct vm *vm);
+
+/* What the arena holds, for a host's memory view (arcade_memory): bytes
+ * throughout. The heap's objects are held (reached from the cart's
+ * globals or the engine's roots), garbage (unreached, until the next
+ * collection frees them) or free; a held object is counted by its kind,
+ * a value tag, the storage behind arrays and records as T_BUF. */
+#define ARCADE_KINDS 16
+struct arcade_memory
+{
+    uint32_t arena;             /* the whole arena */
+    uint32_t tables;            /* the engine's state and the loaded cart */
+    uint32_t heap;              /* the heap, the rest */
+    uint32_t held, garbage, free;
+    uint32_t largest;           /* the largest free block: the biggest
+                                   allocation that needs no collection */
+    uint32_t constants;         /* of held, the cart's strings, never freed */
+    uint32_t engine;            /* of held, reached only from the engine's
+                                   own roots: the target, the sheet, the
+                                   pause menu's labels */
+    uint32_t kind_bytes[ARCADE_KINDS], kind_count[ARCADE_KINDS];
+};
+/* Fills m, and by_global[i] (up to n of them) with the bytes reached from
+ * global i that no earlier global reaches. Between ticks only; nothing is
+ * collected or charged, so the cart runs on as though never looked at. */
+void arcade_memory(struct vm *vm, struct arcade_memory *m,
+                   uint32_t *by_global, uint32_t n);
 
 /* Units charged by the last arcade_start or arcade_tick: the cart's own,
  * and while it listens to playing music, the beat analyser's share of the
@@ -300,7 +367,8 @@ uint32_t arcade_units(const struct vm *vm);
 /* Units charged so far in the call running now, from inside it: for
  * prof() sections */
 uint32_t arcade_units_now(const struct vm *vm);
-/* Units at which one call is stopped as not responding. */
+/* Units at which one call is stopped as not responding; arcade_start(),
+ * init() and the globals before it, may run to four times this. */
 void arcade_set_ceiling(struct vm *vm, uint32_t units);
 
 /* For a profiler, from the host's yield, which comes every 2048 units:
@@ -367,6 +435,11 @@ void arcade_restore(struct vm *vm, const int32_t save[256],
 const void *arcade_snapshot(const struct vm *vm, uint32_t *size);
 uint32_t arcade_cart_hash(const struct vm *vm);
 int arcade_owns_music(const struct vm *vm);
+/* whether Quit keeps the game to resume: not where cart.json says "suspend": false */
+int arcade_suspends(const struct vm *vm);
+/* whether none of the cart's code is running, so a snapshot is one to
+ * resume: not within a call, nor after an error */
+int arcade_between_calls(const struct vm *vm);
 /* mem holds a snapshot read back to where it was taken: the cart, ready
  * for its next tick, or NULL when mem is not one */
 struct vm *arcade_resume(void *mem, uint32_t size,
@@ -474,6 +547,9 @@ void arcade_option_set(struct vm *vm, int i, int32_t value);
 #define ARCADE_OPTIONS_MAX (8 + ARCADE_OPTIONS * 8)
 int arcade_options_pack(const struct vm *vm, uint8_t *buf, int cap);
 int arcade_options_unpack(struct vm *vm, const uint8_t *buf, int n);
+/* Whether opt.set() changed an option since the last call: the host then
+ * keeps the values, as it does the pause menu's */
+int arcade_options_set(struct vm *vm);
 /* The cart's help text, not ended: its length, 0 for none */
 int arcade_help(const struct vm *vm, const char **text);
 
@@ -492,10 +568,11 @@ int arcade_dialog(struct vm *vm, struct arcade_dialog *out);
  * message takes anything. NULL backs out of any. */
 void arcade_dialog_answer(struct vm *vm, const char *answer);
 /* The host's own question over the game, drawn and worked as ui.confirm()
- * is, with buttons labelled yes and no: 1 for yes. Translated text the
- * cart's font cannot draw is shown in FONT.WORLD. */
+ * is, with buttons labelled yes and no, the cursor on no when no_first:
+ * 1 for yes. Translated text the cart's font cannot draw is shown in
+ * FONT.WORLD. */
 int arcade_confirm(struct vm *vm, const char *prompt, const char *yes,
-                   const char *no);
+                   const char *no, int no_first);
 /* A banner across the top of the game's screen, head over title, in the
  * dialogs' style: the rows it covers, from 0, to present with it; the
  * game's pixels under them come back with arcade_banner_undo(). Draws

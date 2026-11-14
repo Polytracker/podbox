@@ -123,8 +123,8 @@ enum {
      * (screens/browse/book_shelf.c). Reached only from that menu's built-in
      * rows, so it has no root-menu entry. */
     GO_TO_BOOK_SHELF,
-    /* The Music Quiz (games/quiz/). Reached from the Music menu's built-in
-     * row, so it has no root-menu entry of its own. */
+    /* The Music Quiz before it was a cart: kept for its number, which a
+     * saved last screen may hold, and mapped to plugins_browser_removed(). */
     GO_TO_MUSIC_QUIZ,
     /* The Books screen (screens/browse/ebook_shelf.c) */
     GO_TO_BOOKS,
@@ -134,6 +134,8 @@ enum {
     /* Every book's Listening Stats (screens/browse/listen_progress.c), from
      * the Audiobooks menu's built-in row */
     GO_TO_LISTEN_STATS,
+    /* The Arcade: the game carts on the player (games/arcade/shelf.c) */
+    GO_TO_ARCADE,
 };
 extern struct menu_item_ex root_menu_;
 

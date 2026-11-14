@@ -116,6 +116,10 @@ bool browser_db_current_under_artist_level(void);
  * same name, from the RAM copy only. 0 for any other row, or one with no
  * folder. */
 unsigned int browser_db_get_art_hash(struct browser_context* c, int item);
+/* The art key of the latest album of an artist row's album artist, 0 for
+ * any other row or an artist who is no album artist */
+unsigned int browser_db_get_artist_cover_hash(struct browser_context* c,
+                                              int item);
 int browser_db_get_icon(struct browser_context* c);
 /* %Lk and %LP for row 'id' of the level on screen. */
 enum list_row_kind browser_db_get_entry_kind(struct browser_context *c, int id);
@@ -225,6 +229,19 @@ void browser_db_enter_album_tracks_on_next_load(long album_seek,
 void browser_db_enter_artist_album_tracks_on_next_load(long album_seek,
                                                    long albumartist_seek,
                                                    const char *album_title);
+/* With an album jump armed, its track list opens on the playing track. */
+void browser_db_select_playing_on_next_album_load(void);
+/* The album of track 'track_idx' opened as though browsed to through the
+ * Music row whose first tag is 'root_tag', on that track, so BACK climbs the
+ * row. The album on its own, as above, where the row cannot reach it. */
+void browser_db_walk_to_album_on_next_load(int root_tag, int track_idx,
+                                           long album_seek, long artist_seek,
+                                           const char *album_title);
+bool browser_db_walk_pending(void);
+/* Drops an armed walk, for an entry that gives up before the load */
+void browser_db_cancel_walk(void);
+/* Whether the last walk opened the album on its own; reading it clears it */
+bool browser_db_take_walk_fallback(void);
 /* As above, but jumps straight to a specific album-artist's album listing
  * (identified by seek), for Artist portraits
  * (screens/covers/artist_portraits.c). A single BACK returns to the carousel;

@@ -84,6 +84,11 @@ the absence of a particular kind of distortion on very quiet passages.
 
 Inaudible on almost all material through headphones.
 
+Automatic adds it only where it is needed. A 16-bit file plays exactly as it is
+in the file, bit for bit, unless Replaygain or a sound effect changes it; 24-bit
+and lossy files are dithered. A USB DAC gets the same, with the volume at 0 dB
+or above. Always dithers everything.
+
 [disk spindown]
 How long the drive sits idle before it is allowed to stop.
 
@@ -147,7 +152,8 @@ Uses the loudness information many rippers write into files, so albums recorded
 at different levels play at a similar volume.
 
 Album gain keeps the balance between tracks on one record; track gain levels
-everything, which suits shuffling.
+everything, which suits shuffling. Off plays each file at its own level, which
+a file needs to play bit for bit.
 
 [replaygain preamp]
 A fixed adjustment applied on top of whatever Replaygain works out.
@@ -405,18 +411,6 @@ song you keep restarting; minutes favours albums you sit through and anything
 long. Skips and night plays are counted either way, because neither has a
 listening time to rank by.
 
-[spike caption]
-Names the track under Spike's field, with the time remaining beside it: Title
-shows the track's title, and Title and Artist adds who it is by. The field
-rises to make room, so the game is a little smaller with this on. Off gives
-the whole panel to the game.
-
-[spike caption scroll]
-Whether a track name too long for the space travels along or is simply cut
-off. It steps a character at a time on the beat rather than gliding. Off is
-the calmer choice while you are playing, and shows as much of the name as
-fits. Off as well while Scrolling is off.
-
 [play log]
 Records what was played and when. On feeds the listening statistics; the
 Last.fm setting writes a scrobble log a computer can upload.
@@ -476,7 +470,8 @@ Adding a folder to a playlist also adds everything in its subfolders.
 
 [warn when erasing dynamic playlist]
 Asks before replacing a queue you have built up by hand, which is otherwise
-easy to lose with one Select.
+easy to lose with one Select. Choosing one track while the queue plays offers
+Play Now instead, which plays it at once and keeps the rest of the queue.
 
 [keep current track when replacing playlist]
 Leaves the playing track in place when a new selection replaces the queue, so
@@ -767,22 +762,6 @@ Whether Podcasts' search lists matching episodes or matching shows first.
 [search order books]
 Whether Books' search lists matching titles or matching authors first.
 
-[quiz title]
-Music Quiz rounds that play a clip and ask which track it is.
-
-[quiz artist]
-Music Quiz rounds that play a clip and ask who it is by. The wrong answers are
-artists that sound alike, or share the genre and decade, as the game goes on.
-
-[quiz album]
-Music Quiz rounds that play a clip and ask which album it is from. In the later
-rounds the wrong answers are the same artist's other albums.
-
-[quiz year]
-Music Quiz rounds that play a clip and ask what year it is from. The hardest
-kind: the answers start five years apart and end one apart, and they are only
-as right as the year tags.
-
 [segregate audiobooks]
 Auto keeps audiobooks out of the music and gives them an Audiobooks row on the
 main menu, whenever the library has any; albums, artists, the carousel and
@@ -850,6 +829,11 @@ Draws artist photographs beside the rows in the database browser, from
 /Artwork/People or the artist's folder. Needs a theme that supports artwork in
 lists, or the rows are tall and empty.
 
+[database artist cover]
+Shows the cover of an artist's latest album when there is no photograph of
+them, instead of the placeholder: beside their row, in Artist Portraits, and
+on the now-playing screen when it shows the artist photograph.
+
 [database audiobook art]
 Draws cover art beside the rows in the Audiobooks browser. Needs a theme that
 supports artwork in lists, or the rows are tall and empty.
@@ -858,6 +842,11 @@ supports artwork in lists, or the rows are tall and empty.
 Draws a photograph beside each author in the Audiobooks browser, from an image
 named after them in /Artwork/People or a folder.jpg in the author's folder.
 Without one the row shows a placeholder.
+
+[database author cover]
+Shows the cover of an audiobook author's latest book beside their row when
+there is no photograph of them, instead of the placeholder. Only shown where
+Audiobook Author Art Rows is on.
 
 [database book art]
 Draws each book's cover beside its row in the Books lists. Needs a theme that
@@ -1148,8 +1137,7 @@ The loud end of the meter's range.
 [scrolling enabled]
 Whether text too long for its line scrolls. Off, it is cut short with "..."
 instead, in lists, menus, the theme's own scrolling lines and the carousel's
-captions, and the other scroll settings then have nothing to move. Spike's
-Scroll Now Playing does nothing while this is off.
+captions, and the other scroll settings then have nothing to move.
 
 [scroll speed]
 How quickly text too long for its line moves.
@@ -1413,8 +1401,12 @@ Playlists.
 What a press of Select does on the now-playing screen: go back to the
 previous screen as Menu Action does, or to the browser last used, to Music,
 Album Covers or Files, open the lyrics, the artist bio, the liner notes, the
-queue or Theme Options, or one of the now-playing menu's other actions. Theme Options says Unavailable when
-the theme has none. Holding Select always opens the now-playing menu.
+queue or Theme Options, or one of the now-playing menu's other actions. Go to
+Album opens the playing track's album on that track, where Go to Album Via
+says; a podcast or book kept apart opens in its own menu. Theme Options says
+Unavailable when the theme has none. Theme Toggle is offered once a theme
+option has been assigned to a button in Theme Options, or the theme names
+one. Holding Select always opens the now-playing menu.
 
 [context_wps]
 What pressing Select and Play together does on the now-playing screen: any
@@ -1425,7 +1417,20 @@ Where Menu goes from the now-playing screen. Previous Screen goes back to
 the list the music was started from, in the same place -- a Music list,
 Files, Playlists, Podcasts, the queue, Album Covers or Artist Portraits --
 and Menu from there reaches the main menu. Music started anywhere else
-goes back to the main menu. Main Menu goes straight there.
+goes back to the main menu. Main Menu goes straight there. Menu can also go
+anywhere else Select can -- Music, Files, Go to Album -- or stop playback.
+
+[wps long press play action]
+What a long press of Play does on the now-playing screen: open Album Covers
+over it, stop playback, or any of the actions Select offers.
+
+[go to album via]
+Where Go to Album on the now-playing screen opens the album. Direct opens it
+on its own, and Left goes back to the now-playing screen. Album, Album
+Artist, Artist and Genre open it inside Music under that list, as though
+browsed to, and Left climbs back up it. Under Artist or Genre the album
+shows only that artist's or that genre's tracks. Where the list is hidden
+or does not reach the album, it opens on its own.
 
 [shortcuts instead of quickscreen]
 Whether a long press opens the quick screen or the shortcuts menu.
@@ -1539,8 +1544,9 @@ presentation controls.
 
 [usb-dac]
 Lets a computer play through the player: it shows up as a sound card, and what
-the computer plays comes out of the headphone socket. The computer's volume
-control sets the player's.
+the computer plays comes out of the headphone socket. The wheel sets the
+player's volume, and so does the computer's volume control where it asks the
+player rather than turning the sound down itself.
 
 Takes effect at the next restart, and while on it keeps about 130K of memory
 back from playback. On an iPod Video in mass-storage mode it takes USB HID's
@@ -1726,9 +1732,9 @@ Deletes every thumbnail and generates them all again from the original images.
 Slow. Use it after changing Fast Build, which only affects thumbnails made from
 then on, or if the cached images themselves look wrong.
 
-[action: Rescan Books, Documents & Images]
-Rebuilds the Books lists and the flat Documents and Images lists from a walk
-of the disk.
+[action: Rebuild File Index]
+Rebuilds the Books lists, the flat Documents and Images lists and the Games
+shelf from a walk of the disk.
 
 It reruns itself after a USB session, which is when files normally change, so
 this is for when they changed some other way.
@@ -1794,6 +1800,11 @@ soon as you leave.
 It can also go on the Now Playing screen's context menu: turn it on in Context
 Menus > Now Playing Menu. It is not offered there for a theme that has to
 reload to show a change, since reloading stops the music.
+
+To change an option from a button, choose Assign to Button in its context
+menu, then set a button to Theme Toggle in Playback > Now Playing Screen.
+Each press moves the option to its next choice. A theme can name one for
+you; assigning your own replaces it.
 
 [action: Clear Backdrop]
 Removes the background image, leaving the background colour showing through.

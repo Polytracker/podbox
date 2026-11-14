@@ -1,0 +1,89 @@
+# Builds the game into a .pbg on every push, and attaches it to a release
+# for every tag pushed. With PAGE true, a push to the main branch also puts
+# the game on GitHub Pages as a web page to play it in. The game's folder is
+# mygame; rename it and change CART below to match.
+
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  CART: mygame
+  # A game that plays the owner's music cannot be a web page: set this
+  # false for one.
+  PAGE: true
+  # The web page's size: 3 draws the game at 480 by 360, or smaller where
+  # the window is; 1 to 4 likewise, or fit to fill the window
+  SCALE: 3
+
+permissions:
+  contents: write
+
+# One build at a time on a branch, so the id is given only once
+concurrency:
+  group: build-${{ github.ref }}
+
+jobs:
+  build:
+    # The template itself is not a game: it keeps the id of noughts
+    if: ${{ !github.event.repository.is_template }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A game made from the template has the template's id, all noughts:
+      # saves and scores are kept under it, so each game is given its own
+      # the first time a branch is built, and that is committed back. A tag
+      # cannot take the commit, so one still on the noughts fails.
+      - name: Give the game its own id
+        run: |
+          if grep -q '"id": *"0000000000000000"' "$CART/cart.json"; then
+            if [ "$GITHUB_REF_TYPE" != branch ]; then
+              echo "::error::$CART/cart.json still has the template's id: push a branch first, so the build gives the game its own, then tag that"
+              exit 1
+            fi
+            id=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+            sed -i "s/\"id\": *\"0000000000000000\"/\"id\": \"$id\"/" "$CART/cart.json"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "Give the game its own id"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+
+      - uses: anthonyfletcher/podbox-arcade-builder@latest
+        id: cart
+        with:
+          cart: ${{ env.CART }}
+          page: ${{ env.PAGE }}
+          scale: ${{ env.SCALE }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.CART }}
+          path: ${{ steps.cart.outputs.pbg }}
+
+      - name: Attach it to a release, for a tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.cart.outputs.pbg }}" --generate-notes
+
+      # The page as the whole of the gh-pages branch, replaced each time
+      - name: Put it on GitHub Pages
+        if: env.PAGE == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          site="$RUNNER_TEMP/site"
+          mkdir -p "$site"
+          cp "${{ steps.cart.outputs.page }}" "$site/index.html"
+          touch "$site/.nojekyll"
+          cd "$site"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "The game, from ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

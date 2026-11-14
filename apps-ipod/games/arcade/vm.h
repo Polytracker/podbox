@@ -27,7 +27,9 @@
 enum
 {
     T_NULL, T_INT, T_STR, T_ARR, T_I32, T_U8, T_OBJ, T_FN, T_BUF, T_FIX,
-    T_IMG
+    T_IMG,
+    T_FXA,      /* a FixArray: an Int32Array's storage, each element 16.16 */
+    T_LAZY      /* a cart image left in the file: its struct lazyimg */
 };
 
 struct value
@@ -157,6 +159,11 @@ struct draw
     struct value target;        /* 0 the screen, or an img */
     struct value sheet;         /* 0 the cart's sheet, or an img: sheet() */
     int32_t cam_x, cam_y;
+    /* camera()'s turn and zoom about its pivot: 16.16 turns (0 none),
+     * the zoom 16.16, its cosine and sine times the zoom, and the pivot
+     * on the target, 16.16; cam_moved when either moves a point */
+    int32_t cam_turn, cam_zoom, cam_cos, cam_sin, cam_px, cam_py;
+    int32_t cam_moved;
     int32_t clip_x0, clip_y0, clip_x1, clip_y1;   /* end exclusive */
     int32_t cur_x, cur_y;
     uint16_t pen;               /* low byte the colour, high byte fillp's */
@@ -168,6 +175,7 @@ struct draw
     uint8_t transparent[32];
     uint16_t xlat[256];         /* dpal[c], or 0x100 if c is transparent */
     uint8_t xlat_stale;         /* set when either changes */
+    uint8_t xlat_plain;         /* xlat[c] is c for every c: a copy */
     uint32_t rgb[256];          /* each entry as 0xRRGGBB */
     uint32_t shown[256];        /* rgb[spal[i]], what present uses */
     int palette_changed;
@@ -194,8 +202,9 @@ struct planeview
     int land_set;
     int16_t land_top[LAND_BANDS][SCREEN_W];
     /* plane.fog(): from near to far (16.16 world pixels) the ground goes
-     * to colour, dithered; kept until changed */
-    int fog_on;
+     * to colour, dithered, and the billboards too unless fog_billboards is
+     * 0; kept until changed */
+    int fog_on, fog_billboards;
     int32_t fog_near, fog_far;
     uint8_t fog_colour;
 };
@@ -206,6 +215,8 @@ struct cellsleep
 {
     uint32_t id, used;
     int32_t w, h;
+    int32_t box[4];                 /* changed since the last step, x0 > x1
+                                     * when nothing has */
     uint8_t awake[256];
     uint32_t sum[256];
     uint8_t dir[256 * 256 / 8];     /* a bit a cell: a liquid's way */
@@ -227,6 +238,14 @@ struct landspec
 /* A row of the floor: its left end and one screen pixel's step, 16.16
  * world pixels */
 struct floor_row { int32_t u, v, du, dv, fog; };
+
+/* The wheel as the player's own lists take it, for arcade_scroll() */
+struct arcade_scroll {
+    int32_t carry;              /* clicks short of a step */
+    int32_t dir;                /* the last step's way, 1 or -1 */
+    uint32_t vel;               /* the smoothed speed, degrees a second */
+    uint32_t quiet;             /* ms since the last step, up to the pause */
+};
 
 /* An effect: signed bytes, each times scale a 16-bit sample */
 struct sfxinfo
@@ -255,6 +274,7 @@ enum { VOICE_OFF, VOICE_SFX, VOICE_TONE };
 struct voice
 {
     uint8_t kind, wave, done;
+    int16_t id;                 /* the effect playing, -2 a tone */
     int32_t s0, s1;             /* an effect's samples either side of frac */
     int32_t scale;
     const int8_t *data;
@@ -274,6 +294,14 @@ struct voice
 #define FREE_CLASSES 64     /* exact lists for blocks of 16..504 bytes */
 #define YIELD_UNITS  2048
 
+/* A chunk left in the cart file, read when it is used: where its bytes
+ * start in the file, how many, and their checksum */
+struct lazy
+{
+    uint32_t at, len, crc;
+};
+#define LAZY_MAX 64                 /* lazy maps, and lazy images */
+
 struct vm
 {
     uint8_t *mem;
@@ -282,6 +310,7 @@ struct vm
 
     /* The cart, as loaded */
     uint8_t rate, menu_button, music;
+    uint8_t no_suspend;         /* Quit keeps nothing to resume */
     uint16_t api;
     uint8_t id[8];
     const uint8_t *meta;
@@ -298,6 +327,9 @@ struct vm
      * opt.changed() is true during it */
     struct arcade_options opts;
     uint8_t opt_pending, opt_changed;
+    uint8_t opt_set;            /* opt.set() since the host last asked */
+    uint8_t format;             /* the cart file's: 2 has ending() */
+    int32_t beat_offset;        /* beat.offset(): ms taken off each press */
     uint32_t cart_hash;         /* the chunks' CRCs, folded: the cart's bytes */
     uint8_t listening;          /* beat.listen(true): the analyser runs */
     /* Dialogs (sys_ui.c): ui.style()'s colours -- the box, its text and
@@ -309,7 +341,8 @@ struct vm
     const uint8_t *code;
     struct fninfo *fns;
     uint32_t nfns;
-    uint32_t entry[4];          /* $start, init, update, draw; or NONE */
+    uint32_t entry[5];          /* $start, init, update, draw, ending;
+                                   or NONE */
     uint32_t *strings;          /* offsets of the constant strings */
     uint32_t nstrings;
     uint16_t *cshape;           /* a CNST shape's runtime shape */
@@ -379,31 +412,41 @@ struct vm
     int32_t active_map;         /* -1 while the map is the empty default */
     uint16_t *img_globals;      /* pairs: a global's slot, an image's number */
     uint32_t nimg_globals;
+    struct lazy *mapc, *imgc;       /* LAZY_MAX each, made as first needed */
+    uint32_t nmapc, nimgc;
+    struct lazyimg *lazyimgs;
+    uint32_t nlazyimgs;
     const uint8_t *sfx;
     uint32_t sfx_len, nsfx;
     struct sfxinfo *sfxdir;
     struct cartfont fonts[MAX_CART_FONTS];
     uint32_t nfonts;
     struct voice voices[4];
+    uint8_t muted;              /* the owner muted the game's sound */
     uint32_t actor_shape, particle_shape;   /* what makes a record a pool */
     struct planeview plane;
     uint32_t rules_shape;                   /* what makes a record rules */
     uint32_t links_shape;                   /* ... and links */
+    uint32_t segs_shape;                    /* ... and segment sets */
     struct cellsleep sleep[2];
     uint32_t sleep_clock;
     uint32_t frame;
     int64_t t_base;             /* t() at frame_base, 16.16, for setrate() */
     uint32_t frame_base;
     uint32_t skipped;           /* frames not drawn since skipped() */
+    uint8_t paused;             /* paused since resumed() */
     uint8_t held, pressed;      /* btn() and btnp() bits */
+    uint8_t released;           /* btnr()'s: down last tick, up this one */
     uint16_t held_ticks[5];
     int32_t wheel, wheelpos;
+    int32_t wheelsteps;         /* this tick's, by arcade_scroll() */
+    struct arcade_scroll scroll;
     struct arcade_music heard;  /* this tick's, from arcade_music() */
     int32_t beat_inbar;         /* from the last beat.next() */
     int32_t beat_margin;        /* from the last beat.downbeat() */
     int quit;
     struct value menu_label[5], menu_fn[5];   /* menuitem(); roots */
-    uint64_t rng_state, rng_inc;
+    uint64_t rng_state;
     int32_t save[256];
     uint8_t save_frac[32];      /* which saved values are fractions */
     int save_dirty;
@@ -415,13 +458,25 @@ struct vm
     char msg[112];
 };
 
-/* A cart map: its cells, LZ4, and where each object's record starts */
+/* A cart map: its cells, LZ4 -- in the arena, or left in the cart file as
+ * lazy chunk mapc[lazy] -- and where each object's record starts */
 struct mapinfo
 {
     uint16_t w, h, nobj;
     uint32_t zlen;
     const uint8_t *z;
     const uint8_t **obj;
+    int32_t lazy;               /* -1 when z holds the cells */
+};
+
+
+/* A cart image left in the file: IMG.<name>'s global holds a T_LAZY of
+ * this until img.load() puts there a T_IMG of the copy it makes */
+struct lazyimg
+{
+    uint16_t w, h;
+    uint16_t chunk, slot;           /* its imgc, and the global naming it */
+    uint32_t copy;                  /* the loaded copy's offset, or 0 */
 };
 
 #define NONE 0xffffu
@@ -444,7 +499,7 @@ static inline struct value mk(uint32_t tag, int32_t v)
 
 /* Numbers. An integer and a fraction meet as 64-bit 16.16, where an
  * integer n is n * 65536 exactly; results wrap to 32 bits. These are the
- * rules tools/arcade/src/numbers.js states for the compiler. */
+ * rules arcade/sdk/src/numbers.js states for the compiler. */
 static inline int is_num(struct value v)
 {
     return v.tag == T_INT || v.tag == T_FIX;
@@ -458,6 +513,12 @@ static inline int64_t scaled(struct value v)
 static inline int32_t wrap32(int64_t x)
 {
     return (int32_t)(uint32_t)(uint64_t)x;
+}
+
+/* A number as a FixArray keeps it: 16.16, wrapping past 32767 */
+static inline int32_t to_fix(struct value v)
+{
+    return v.tag == T_FIX ? v.v : (int32_t)((uint32_t)v.v << 16);
 }
 
 /* A fraction toward zero, as bitwise operators and typed arrays take it. */
@@ -502,6 +563,53 @@ static inline uint32_t utf8_whole(const char *s, uint32_t n)
     return n;
 }
 
+/* The bytes of cp in UTF-8 */
+static inline int utf8_bytes(uint32_t cp)
+{
+    return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+}
+
+/* cp written at d in UTF-8: its bytes */
+static inline int utf8_put(void *d, uint32_t cp)
+{
+    uint8_t *o = d;
+    if (cp < 0x80) {
+        o[0] = (uint8_t)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        o[0] = (uint8_t)(0xc0 | cp >> 6);
+        o[1] = (uint8_t)(0x80 | (cp & 63));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        o[0] = (uint8_t)(0xe0 | cp >> 12);
+        o[1] = (uint8_t)(0x80 | ((cp >> 6) & 63));
+        o[2] = (uint8_t)(0x80 | (cp & 63));
+        return 3;
+    }
+    o[0] = (uint8_t)(0xf0 | cp >> 18);
+    o[1] = (uint8_t)(0x80 | ((cp >> 12) & 63));
+    o[2] = (uint8_t)(0x80 | ((cp >> 6) & 63));
+    o[3] = (uint8_t)(0x80 | (cp & 63));
+    return 4;
+}
+
+/* The little-endian 32 bits at p */
+static inline uint32_t rd_le32(const uint8_t *p)
+{
+    return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+/* v written little-endian at p */
+static inline void wr_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
 /* vm.c */
 int vm_fail(struct vm *vm, const char *a, const char *b, const char *c);
 int vm_call(struct vm *vm, struct value fn, int argc, struct value *out);
@@ -541,6 +649,7 @@ void vm_out_set(struct vm *vm, struct value o, uint32_t i, struct value v);
 int vm_fix_op(struct vm *vm, int op, struct value a, struct value b,
               struct value *out);
 void vm_charge(struct vm *vm, uint32_t units);
+int32_t arcade_scroll(struct arcade_scroll *s, int32_t clicks, uint32_t rate);
 /* vm_charge() for a native's long work, as it goes: 0, the cart stopped,
  * once the call is past the ceiling */
 int vm_spend(struct vm *vm, uint32_t units);
@@ -572,11 +681,15 @@ int vm_field(struct vm *vm, struct value o, uint32_t i, struct value *name,
 /* gc.c */
 void gc_init(struct vm *vm);
 uint32_t gc_alloc(struct vm *vm, uint32_t type, uint32_t bytes);
+uint32_t gc_scratch(struct vm *vm, uint32_t bytes);
+void gc_scratch_end(struct vm *vm, uint32_t bytes);
 void gc_collect(struct vm *vm);
 
 /* loader.c */
 uint32_t perm_alloc(struct vm *vm, uint32_t bytes);
 int lz4_decode(const uint8_t *src, uint32_t n, uint8_t *dst, uint32_t size);
+int lazy_unpack(struct vm *vm, const struct lazy *c, uint8_t *dst,
+                uint32_t size);
 uint32_t key_id(struct vm *vm, struct value s, int add);
 uint32_t key_find(struct vm *vm, const char *b, uint32_t len);
 /* A record's field by its name, from C; null when o is not a record or has
@@ -613,9 +726,8 @@ void core_draw_sprites(struct vm *vm, const struct column *on,
                        const struct column *y, const struct column *flip,
                        const struct column *frames,
                        const struct column *speed, uint32_t n);
-void core_draw_dots(struct vm *vm, const struct value *life,
-                    const struct value *x, const struct value *y,
-                    const struct value *c, uint32_t n);
+void core_draw_particles(struct vm *vm, struct value *const *arr,
+                         uint32_t n, int32_t w, int32_t h, int32_t shade);
 void core_draw_quads(struct vm *vm, const int32_t *q, const uint8_t *c,
                      uint32_t n);
 void core_draw_lines(struct vm *vm, const int32_t *seg, uint32_t n,
@@ -667,10 +779,14 @@ struct cellworld
 };
 int cells_world(struct vm *vm, struct value field, struct value rules,
                 struct cellworld *w);
+void cells_drawn(struct vm *vm, uint32_t id, int32_t w, int32_t h, int32_t x0,
+                 int32_t y0, int32_t x1, int32_t y1);
 enum { CELL_SOLID = 1, CELL_LIQUID = 2, CELL_HARM = 4 };
 
 /* sys_actors.c, for cells: actors' boxes as obstacles, and a particle
- * pool's arrays (life, x, y, dx, dy, c) for cells.lift */
+ * pool's PARTICLE_ARRAYS arrays (life, x, y, dx, dy, c, sp, flip) for
+ * cells.lift */
+#define PARTICLE_ARRAYS 8
 int32_t actors_boxes(struct vm *vm, struct value pools, uint8_t *bits,
                      int32_t w, int32_t h, int32_t *boxes, int32_t cap);
 int particles_arrays(struct vm *vm, struct value p, struct value **arr,

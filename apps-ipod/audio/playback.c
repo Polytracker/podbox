@@ -1811,6 +1811,19 @@ static bool audio_init_codec(struct track_info *track_infop,
     int codt_loaded = get_audio_base_codec_type(codec_loaded());
     int hid = ERR_HANDLE_NOT_FOUND;
 
+#ifdef USB_ENABLE_AUDIO
+    /* A codec sets the DSP's format only when loaded, and a sound card
+     * stream since then has set it to its own */
+    static unsigned int loaded_claims;
+    if (codt_loaded != AFMT_UNKNOWN
+        && loaded_claims != usb_audio_get_dsp_claims())
+    {
+        codec_unload();
+        codt_loaded = AFMT_UNKNOWN;
+    }
+    loaded_claims = usb_audio_get_dsp_claims();
+#endif
+
     if (codt_loaded != AFMT_UNKNOWN)
     {
         int codt = get_audio_base_codec_type(track_id3->codectype);
@@ -2130,6 +2143,25 @@ static int load_album_art_from_path(char *path, struct bufopen_bitmap_data *user
     return hid;
 }
 
+/* The cover that stands in for a missing portrait of the album artist of the
+ * track at 'path': their latest album's, or their latest book's for a book,
+ * when the setting for that kind asks for it. 0 for none, which is always
+ * the answer without the RAM database. */
+static unsigned int artist_cover_key(const char *path)
+{
+    struct tagcache_album al;
+    struct tagcache_artist ar;
+    int idx = tagcache_find_path(path);
+
+    if (idx < 0 || !tagcache_album_get(tagcache_album_of(idx), &al)
+        || !tagcache_artist_get(tagcache_artist_find(al.artist_seek), &ar))
+        return 0;
+    if (!(al.spoken == al.tracks ? global_settings.db_author_cover
+                                 : global_settings.db_artist_cover))
+        return 0;
+    return ar.cover_hash;
+}
+
 /* Load the track's folder art from the pre-scaled cache (the 300px "wps"
  * thumbnail). Returns a handle, or an error when there is no real cached art --
  * the placeholder is rejected so an artless album falls through to the theme's
@@ -2137,7 +2169,9 @@ static int load_album_art_from_path(char *path, struct bufopen_bitmap_data *user
  *
  * Which picture that is, 'artist' says: the album's, by the key the browser
  * shows it with (art_cache_track_key()), or the artist's, keyed by the name the
- * database files the track under -- its album artist, or else its artist. */
+ * database files the track under -- its album artist, or else its artist.
+ * Under the Artist setting an artist with no portrait takes
+ * artist_cover_key()'s; Auto has the track's own cover to fall back on. */
 static int load_cached_albumart(struct mp3entry *track_id3,
                                 struct bufopen_bitmap_data *user_data,
                                 bool is_current_track, int i, bool artist)
@@ -2157,6 +2191,13 @@ static int load_cached_albumart(struct mp3entry *track_id3,
                             ? track_id3->albumartist : track_id3->artist);
     else
         key = art_cache_track_key(track_id3->path);
+
+    if (key
+        && art_cache_lookup_hash(key, wps_size_idx, path, sizeof(path),
+                                 &is_fallback)
+        && is_fallback && artist
+        && global_settings.wps_art_source == WPS_ART_ARTIST)
+        key = artist_cover_key(track_id3->path);
 
     if (!key
         || !art_cache_lookup_hash(key, wps_size_idx, path, sizeof(path),
@@ -2192,8 +2233,9 @@ static int audio_load_albumart(struct track_info *infop,
          * embedded tags and folder images both belong to the record, not the
          * performer -- so under the explicit Artist setting an artist with no
          * portrait ends with no artwork rather than quietly falling through to
-         * the album cover. Missing portraits are meant to be visible; that is
-         * what the art cache health screen reports on.
+         * the album cover, unless Album Cover If No Photo asks for their
+         * latest album's. Missing portraits are otherwise meant to be
+         * visible; that is what the art cache health screen reports on.
          *
          * "Auto" is the exception, and asks for artist art only for a playlist
          * built from an artist browse. It is a convenience rather than a
@@ -2260,9 +2302,11 @@ static int audio_load_albumart(struct track_info *infop,
                 if (!same_album && is_cacheable)
                 {
                     clear_last_embedded_album_art();
-                    strlcpy(last_embedded_aa_album, track_id3->album,
+                    strlcpy(last_embedded_aa_album,
+                            track_id3->album ? track_id3->album : "",
                             sizeof(last_embedded_aa_album));
-                    strlcpy(last_embedded_aa_albumartist, track_id3->albumartist,
+                    strlcpy(last_embedded_aa_albumartist,
+                            track_id3->albumartist ? track_id3->albumartist : "",
                             sizeof(last_embedded_aa_albumartist));
                     last_embedded_aa_discnum = track_id3->discnum;
                 }
@@ -3974,7 +4018,15 @@ void audio_playback_handler(struct queue_event *ev)
              * one nobody asked for (the buflib shrink callback), where a
              * caller is blocked waiting on us. */
             audio_stop_playback(ev->id != SYS_USB_CONNECTED && ev->data == 0);
-            if (ev->data != 0)
+            /* The USB sound card reconfigures the playback DSP, and a
+             * resident codec sets its sample format only when loaded: unload
+             * it so the next track loads it again. A sound scan's codec is
+             * in the slot while one runs, and the scan closes it itself. */
+            if (ev->id == SYS_USB_CONNECTED && !track_decode_busy())
+                codec_unload();
+            /* Unplug can queue the disconnect while playback stops: leave
+             * it for usb_wait_for_disconnect() to consume. */
+            if (ev->data != 0 && ev->id != SYS_USB_CONNECTED)
                 queue_clear(&audio_queue);
             return; /* no more playback */
 

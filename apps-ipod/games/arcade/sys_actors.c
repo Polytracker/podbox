@@ -30,22 +30,37 @@ enum { A_ON, A_X, A_Y, A_DX, A_DY, A_W, A_H, A_SP, A_FLIP, A_CELL,
        A_FRAMES, A_SPEED, A_MAT, A_ZONE,
        A_ARRAYS, A_GRAVITY = A_ARRAYS, A_DRAG, A_PLATFORMS, A_FIELD,
        A_RULES, A_FIELD_X, A_FIELD_Y, A_DENSITY, A_ONEWAY, A_SPLASH,
-       A_FIELDS };
+       A_SLOPE_UP, A_SLOPE_DOWN, A_LADDERS, A_FIELDS };
 static const char *const actor_keys[A_FIELDS] = {
     "on", "x", "y", "dx", "dy", "w", "h", "sp", "flip", "cell",
     "frames", "speed", "mat", "zone",
     "gravity", "drag", "platforms", "field", "rules", "field_x", "field_y",
-    "density", "oneway", "splash"
+    "density", "oneway", "splash", "slope_up", "slope_down", "ladders"
 };
 
-enum { P_LIFE, P_X, P_Y, P_DX, P_DY, P_C, P_ARRAYS,
-       P_GRAVITY = P_ARRAYS, P_DRAG, P_FIELD, P_FIELD_X, P_FIELD_Y, P_FIELDS };
+/* A particle is a pixel of colour c, or with sp set, that sprite's top
+ * left w x h, flipped by flip (1 across, 2 up and down) and with its
+ * colours 1 to shade taken from c's ramp: colour k drawn as c + k - 1.
+ * floor and bounce: one falling through floor turns back up at bounce of
+ * its speed, unless that is under a quarter pixel a tick. spin: a sprite
+ * turns a quarter (flip 0, 1, 3, 2) every spin ticks. cull: one that
+ * particles.draw finds wholly off the screen, through the camera it draws
+ * by, is gone -- but under a camera turned or zoomed, where no box on the
+ * screen is a box in the world. A negative drag speeds them up. */
+enum { P_LIFE, P_X, P_Y, P_DX, P_DY, P_C, P_SP, P_FLIP,
+       P_ARRAYS,                    /* PARTICLE_ARRAYS, in vm.h */
+       P_GRAVITY = P_ARRAYS, P_DRAG, P_FIELD, P_FIELD_X, P_FIELD_Y,
+       P_W, P_H, P_SHADE, P_FLOOR, P_BOUNCE, P_SPIN, P_CULL, P_FIELDS };
+_Static_assert(P_ARRAYS == PARTICLE_ARRAYS, "cells.lift's arrays");
 static const char *const particle_keys[P_FIELDS] = {
-    "life", "x", "y", "dx", "dy", "c", "gravity", "drag",
-    "field", "field_x", "field_y"
+    "life", "x", "y", "dx", "dy", "c", "sp", "flip", "gravity", "drag",
+    "field", "field_x", "field_y", "w", "h", "shade", "floor", "bounce",
+    "spin", "cull"
 };
 
-static int32_t fx(struct value v)
+/* always inlined: -Os would call it, and the pool systems read several
+ * fields an actor a tick */
+static inline __attribute__((always_inline)) int32_t fx(struct value v)
 {
     return is_num(v) ? wrap32(scaled(v)) : 0;
 }
@@ -639,6 +654,39 @@ static void in_field(const struct world *w, struct contacts *c, uint32_t i,
     }
 }
 
+/* Where an actor's feet rest on a ramp of 45 degrees: the map cells whose
+ * flags share a bit with up rise to the right (/), down's to the left (\).
+ * A ramp is not solid: an actor walks into it, and is set on its surface
+ * at its feet's middle, as it sinks below it or comes within 4 pixels
+ * above it -- so it stays on a ramp walking down -- only while not going
+ * up. 1 with Y and DY set when it was. */
+#define SLOPE_GLUE (4 << 16)
+
+static int on_slope(const struct vm *vm, int32_t X, int32_t *Y, int32_t W,
+                    int32_t H, int32_t *DY, int32_t up, int32_t down,
+                    int32_t *hx, int32_t *hy)
+{
+    int32_t foot = X + W / 2, feet = *Y + H;
+    int32_t cx = foot >> CELL_SHIFT, px = (foot >> 16) - (cx << 3);
+    if ((!up && !down) || *DY < 0)
+        return 0;
+    for (int k = 0; k < 2; k++) {
+        int32_t cy = ((feet - 1) >> CELL_SHIFT) + k;
+        int rising = solid(vm, cx, cy, up);
+        if (!rising && !solid(vm, cx, cy, down))
+            continue;
+        int32_t surf = ((cy << 3) + (rising ? 7 - px : px)) << 16;
+        if (feet >= surf - SLOPE_GLUE) {
+            *Y = surf - H;
+            *DY = 0;
+            *hx = cx;
+            *hy = cy;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* actors.move(p, solid, trigger, out, [oneway]): as well as the map, the
  * pool's platforms (another pool, which moves first) and its cells field,
  * both named in its fields. Map cells whose flags share a bit with oneway
@@ -668,16 +716,24 @@ NATIVE(actors_move)
     struct value *h = ELEMS(vm, f[A_H]), *cell = ELEMS(vm, f[A_CELL]);
     struct value *mat = ELEMS(vm, f[A_MAT]);
     int splashes = vm_truthy(vm, f[A_SPLASH]);
+    int32_t up = is_num(f[A_SLOPE_UP]) ? floor_int(f[A_SLOPE_UP]) : 0;
+    int32_t down = is_num(f[A_SLOPE_DOWN]) ? floor_int(f[A_SLOPE_DOWN]) : 0;
+    int32_t ladders = is_num(f[A_LADDERS]) ? floor_int(f[A_LADDERS]) : 0;
     uint32_t moved = 0, checked = 0;
     for (uint32_t i = 0; i < n; i++) {
         if (!vm_truthy(vm, on[i]))
             continue;
         moved++;
         int32_t X = fx(x[i]), Y = fx(y[i]), W = fx(w[i]), H = fx(h[i]);
-        int32_t DX = dragged(fx(dx[i]), drag), DY = dragged(fx(dy[i]) + g, drag);
         int32_t hx, hy, side, s2, p0;
         if (W < 1) W = 1;
         if (H < 1) H = 1;
+        /* on a ladder, by the actor's middle, gravity lets go: the game
+         * moves it up and down */
+        int32_t gi = ladders && solid(vm, (X + W / 2) >> CELL_SHIFT,
+                                      (Y + H / 2) >> CELL_SHIFT, ladders)
+                     ? 0 : g;
+        int32_t DX = dragged(fx(dx[i]), drag), DY = dragged(fx(dy[i]) + gi, drag);
         if (wd.np) {
             carry(&wd, &X, &Y, W, H);
             push(&wd, &c, i, &X, &Y, W, H, smask, omask, &checked);
@@ -694,6 +750,17 @@ NATIVE(actors_move)
                      &checked);
         if ((s2 = obstacles(&wd, p0, &Y, H, X, W, 0, &hx, &hy, &checked)) >= 0)
             side = s2;
+        /* a ramp the feet meet, where it is no lower than any floor the
+         * sweep stopped them on: HIT.DOWN, on its feet */
+        int32_t sy = Y, sdy = DY, shx, shy;
+        if (on_slope(vm, X, &sy, W, H, &sdy, up, down, &shx, &shy) &&
+            (side < 0 || sy <= Y)) {
+            Y = sy;
+            DY = sdy;
+            hx = shx;
+            hy = shy;
+            side = 3;
+        }
         if (side >= 0)
             contact(&c, i, side, hx, hy);
         if (wd.field) {
@@ -725,7 +792,9 @@ NATIVE(actors_move)
             checked %= 8;
         }
     }
-    vm_charge(vm, 10 + n / 4 + moved * 6 + c.n * 2 + checked / 8);
+    /* measured on the ARM rig (.build/arcade-rig, sysprobe3): about 20
+     * units an actor moved, most of it reading and writing its fields */
+    vm_charge(vm, 10 + n + moved * 20 + c.n * 8 + checked / 8);
     *out = mk(T_INT, (int32_t)c.n);
     return 1;
 }
@@ -837,7 +906,9 @@ NATIVE(actors_overlaps)
             tests = 0;
         }
     }
-    vm_charge(vm, 10 + tests / 2 + live * 2);
+    /* measured on the rig: reading each actor of both pools costs about
+     * 14 units, far more than the tests between them */
+    vm_charge(vm, 10 + tests / 2 + (live + na) * 14);
     *out = mk(T_INT, (int32_t)k);
     return 1;
 }
@@ -890,7 +961,9 @@ NATIVE(actors_zones)
             contact(&c, i, 4, in, column_at(&objs, (uint32_t)in * 5, 0));
         zone[i] = mk(T_INT, in);
     }
-    vm_charge(vm, 10 + n * (uint32_t)k / 4 + c.n * 2);
+    /* measured on the rig: about 6 units an actor, and 2 a zone it is
+     * tried against */
+    vm_charge(vm, 10 + n * (6 + (uint32_t)k * 2) + c.n * 2);
     *out = mk(T_INT, (int32_t)c.n);
     return 1;
 }
@@ -1107,7 +1180,9 @@ NATIVE(actors_bounce)
             tests = 0;
         }
     }
-    vm_charge(vm, 10 + tests / 2 + live * 2 + k * 8);
+    /* measured on the rig: reading each actor of both pools costs about
+     * 16 units */
+    vm_charge(vm, 10 + tests / 2 + (live + na) * 16 + k * 8);
     *out = mk(T_INT, (int32_t)k);
     return 1;
 }
@@ -1231,7 +1306,8 @@ NATIVE(actors_bounce_map)
             checked %= 8;
         }
     }
-    vm_charge(vm, 10 + n / 4 + moved * 8 + k * 2 + checked / 8);
+    /* measured on the rig: about 32 units a circle moved */
+    vm_charge(vm, 10 + n + moved * 32 + k * 8 + checked / 8);
     *out = mk(T_INT, (int32_t)k);
     return 1;
 }
@@ -1255,6 +1331,60 @@ static int particles(struct vm *vm, struct value p, struct value *f,
                    "particles.pool()");
 }
 
+/* A sprite particle's size: the pool's w and h, 1 to 16, 8 when unset */
+static void sprite_size(const struct value *f, int32_t *w, int32_t *h)
+{
+    *w = is_num(f[P_W]) ? floor_int(f[P_W]) : 0;
+    *h = is_num(f[P_H]) ? floor_int(f[P_H]) : 0;
+    if (*w < 1 || *w > 16)
+        *w = 8;
+    if (*h < 1 || *h > 16)
+        *h = 8;
+}
+
+/* particles.bounds(p, out): the box the live particles cover as drawn --
+ * the camera's offset taken off, a sprite its size -- into out, x0 y0 x1
+ * y1 inclusive; how many are live, out untouched when none */
+NATIVE(particles_bounds)
+{
+    (void)argc;
+    struct value f[P_FIELDS];
+    uint32_t n, live = 0;
+    if (!particles(vm, a[0], f, &n, "particles.bounds"))
+        return 0;
+    if (a[1].tag != T_I32 || I32(vm, a[1])->len < 4)
+        return vm_fail(vm, "particles.bounds() needs an Int32Array of 4",
+                       "", "");
+    int32_t w, h;
+    sprite_size(f, &w, &h);
+    struct value *lf = ELEMS(vm, f[P_LIFE]), *x = ELEMS(vm, f[P_X]);
+    struct value *y = ELEMS(vm, f[P_Y]), *sp = ELEMS(vm, f[P_SP]);
+    int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (floor_int(lf[i]) <= 0)
+            continue;
+        int sprite = is_num(sp[i]) && floor_int(sp[i]) > 0;
+        int32_t px = floor_int(x[i]) - vm->d.cam_x;
+        int32_t py = floor_int(y[i]) - vm->d.cam_y;
+        int32_t qx = px + (sprite ? w - 1 : 0), qy = py + (sprite ? h - 1 : 0);
+        if (!live++) {
+            x0 = px; y0 = py; x1 = qx; y1 = qy;
+        } else {
+            if (px < x0) x0 = px;
+            if (py < y0) y0 = py;
+            if (qx > x1) x1 = qx;
+            if (qy > y1) y1 = qy;
+        }
+    }
+    if (live) {
+        int32_t *d = I32(vm, a[1])->d;
+        d[0] = x0; d[1] = y0; d[2] = x1; d[3] = y1;
+    }
+    vm_charge(vm, 10 + n / 4);
+    *out = mk(T_INT, (int32_t)live);
+    return 1;
+}
+
 /* A random amount from -range to range, 16.16 */
 static int32_t spread(struct vm *vm, int32_t range)
 {
@@ -1264,16 +1394,18 @@ static int32_t spread(struct vm *vm, int32_t range)
     return (int32_t)(((int64_t)range * (int32_t)(r * 2 - 0xffff)) >> 16);
 }
 
-/* particles.emit(p, count, x, y, dx, dy, spread, life, c) */
+/* particles.emit(p, count, x, y, dx, dy, spread, life, c, [sp]): with sp,
+ * each is that sprite, flipped at random */
 NATIVE(particles_emit)
 {
     struct value f[P_FIELDS];
     uint32_t n;
-    int32_t count, life, c;
+    int32_t count, life, c, sprite = 0;
     if (!particles(vm, a[0], f, &n, "particles.emit") ||
         !whole_arg(vm, a, argc, 1, "particles.emit", &count) ||
         !whole_arg(vm, a, argc, 7, "particles.emit", &life) ||
-        !whole_arg(vm, a, argc, 8, "particles.emit", &c))
+        !whole_arg(vm, a, argc, 8, "particles.emit", &c) ||
+        (argc > 9 && !whole_arg(vm, a, argc, 9, "particles.emit", &sprite)))
         return 0;
     if (life > 30000)
         life = 30000;
@@ -1295,9 +1427,14 @@ NATIVE(particles_emit)
         ELEMS(vm, f[P_DX])[i] = mk(T_FIX, dx + spread(vm, sp));
         ELEMS(vm, f[P_DY])[i] = mk(T_FIX, dy + spread(vm, sp));
         ELEMS(vm, f[P_C])[i] = mk(T_INT, c);
+        ELEMS(vm, f[P_SP])[i] = mk(T_INT, sprite > 0 ? sprite : 0);
+        ELEMS(vm, f[P_FLIP])[i] =
+            mk(T_INT, sprite > 0 ? (int32_t)(core_random(vm) & 3) : 0);
         made++;
     }
-    vm_charge(vm, 10 + (uint32_t)made * 2 + n / 16);
+    /* measured on the rig (sysprobe2): about 10 units a particle, its
+     * random numbers most of it */
+    vm_charge(vm, 10 + (uint32_t)made * 10 + n / 16);
     *out = mk(T_INT, made);
     return 1;
 }
@@ -1307,6 +1444,7 @@ struct dropfield
 {
     uint8_t *c;
     int32_t w, h, x0, y0;
+    int32_t box[4];             /* the cells settled into, x0 > x1 for none */
 };
 
 /* A particle moved from ox, oy to nx, ny (16.16 world pixels) into
@@ -1314,7 +1452,7 @@ struct dropfield
  * its colour -- the colour is the material -- where it was, or the
  * nearest air above or beside that; either way it is gone as a particle.
  * Air is material 0. */
-static void settle(const struct dropfield *f, struct value *life, uint32_t i,
+static void settle(struct dropfield *f, struct value *life, uint32_t i,
                    int32_t ox, int32_t oy, int32_t nx, int32_t ny,
                    struct value c, uint32_t *scanned)
 {
@@ -1344,6 +1482,15 @@ static void settle(const struct dropfield *f, struct value *life, uint32_t i,
             *scanned += (uint32_t)(qy - cy);
             if (cy >= 0) {
                 f->c[cy * f->w + cx] = m;
+                if (f->box[0] > f->box[2]) {
+                    f->box[0] = f->box[2] = cx;
+                    f->box[1] = f->box[3] = cy;
+                } else {
+                    if (cx < f->box[0]) f->box[0] = cx;
+                    if (cx > f->box[2]) f->box[2] = cx;
+                    if (cy < f->box[1]) f->box[1] = cy;
+                    if (cy > f->box[3]) f->box[3] = cy;
+                }
                 break;
             }
         }
@@ -1429,10 +1576,15 @@ NATIVE(particles_step)
     if (!particles(vm, a[0], f, &n, "particles.step"))
         return 0;
     int32_t g = fx(f[P_GRAVITY]), drag = fx(f[P_DRAG]);
+    int32_t floor_y = fx(f[P_FLOOR]), bounce = fx(f[P_BOUNCE]);
+    int32_t spin = is_num(f[P_SPIN]) ? floor_int(f[P_SPIN]) : 0;
+    /* a quarter turn: flip 0, 1, 3, 2, round again */
+    static const uint8_t turned[4] = { 1, 3, 0, 2 };
     struct value *lf = ELEMS(vm, f[P_LIFE]), *x = ELEMS(vm, f[P_X]);
     struct value *y = ELEMS(vm, f[P_Y]), *dx = ELEMS(vm, f[P_DX]);
     struct value *dy = ELEMS(vm, f[P_DY]), *c = ELEMS(vm, f[P_C]);
-    struct dropfield fd = { NULL, 0, 0, 0, 0 };
+    struct value *sp = ELEMS(vm, f[P_SP]), *flip = ELEMS(vm, f[P_FLIP]);
+    struct dropfield fd = { NULL, 0, 0, 0, 0, { 1, 0, 0, 0 } };
     if (f[P_FIELD].tag == T_IMG) {
         struct img *im = MEM(vm, (uint32_t)f[P_FIELD].v);
         fd.c = im->px;
@@ -1458,12 +1610,28 @@ NATIVE(particles_step)
         dx[i] = mk(T_FIX, DX);
         dy[i] = mk(T_FIX, DY);
         int32_t ox = fx(x[i]), oy = fx(y[i]);
-        x[i] = mk(T_FIX, ox + DX);
-        y[i] = mk(T_FIX, oy + DY);
+        int32_t NY = wrap32((int64_t)oy + DY);
+        if (floor_y > 0 && DY > 0 && oy < floor_y && NY >= floor_y) {
+            int32_t up = (int32_t)(((int64_t)DY * bounce) >> 16);
+            if (up >= (1 << 14)) {      /* a quarter pixel a tick */
+                NY = floor_y;
+                dy[i] = mk(T_FIX, -up);
+            }
+        }
+        int32_t NX = wrap32((int64_t)ox + DX);
+        x[i] = mk(T_FIX, NX);
+        y[i] = mk(T_FIX, NY);
+        if (spin > 0 && is_num(sp[i]) && floor_int(sp[i]) > 0 &&
+            (vm->frame + i) % (uint32_t)spin == 0)
+            flip[i] = mk(T_INT, turned[floor_int(flip[i]) & 3]);
         if (fd.c)
-            settle(&fd, lf, i, ox, oy, ox + DX, oy + DY, c[i], &scanned);
+            settle(&fd, lf, i, ox, oy, NX, NY, c[i], &scanned);
     }
-    vm_charge(vm, 10 + n / 8 + live * (fd.c ? 4 : 2) + scanned / 8);
+    /* about 7 units a live particle, measured; 2 more over a field */
+    if (fd.c && fd.box[0] <= fd.box[2])
+        cells_drawn(vm, (uint32_t)f[P_FIELD].v, fd.w, fd.h, fd.box[0],
+                    fd.box[1], fd.box[2], fd.box[3]);
+    vm_charge(vm, 10 + n / 8 + live * (fd.c ? 9 : 7) + scanned / 8);
     return 1;
 }
 
@@ -1474,7 +1642,32 @@ NATIVE(particles_draw)
     uint32_t n;
     if (!particles(vm, a[0], f, &n, "particles.draw"))
         return 0;
-    core_draw_dots(vm, ELEMS(vm, f[P_LIFE]), ELEMS(vm, f[P_X]),
-                   ELEMS(vm, f[P_Y]), ELEMS(vm, f[P_C]), n);
+    int32_t w, h;
+    sprite_size(f, &w, &h);
+    int32_t shade = is_num(f[P_SHADE]) ? floor_int(f[P_SHADE]) : 0;
+    struct value *arr[P_ARRAYS];
+    for (int i = 0; i < P_ARRAYS; i++)
+        arr[i] = ELEMS(vm, f[i]);
+    if (shade < 0)
+        shade = 0;
+    if (shade > 16)
+        shade = 16;
+    /* culled through the camera this draws by */
+    if (vm_truthy(vm, f[P_CULL]) && !vm->d.cam_moved) {
+        struct value *lf = arr[P_LIFE], *x = arr[P_X], *y = arr[P_Y];
+        struct value *sp = arr[P_SP];
+        for (uint32_t i = 0; i < n; i++) {
+            if (floor_int(lf[i]) <= 0)
+                continue;
+            int sprite = is_num(sp[i]) && floor_int(sp[i]) > 0;
+            int32_t sx = floor_int(x[i]) - vm->d.cam_x;
+            int32_t sy = floor_int(y[i]) - vm->d.cam_y;
+            if (sx + (sprite ? w : 1) <= 0 || sx >= SCREEN_W ||
+                sy + (sprite ? h : 1) <= 0 || sy >= SCREEN_H)
+                lf[i] = mk(T_INT, 0);
+        }
+        vm_charge(vm, n / 8);
+    }
+    core_draw_particles(vm, arr, n, w, h, shade);
     return 1;
 }

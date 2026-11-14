@@ -1222,21 +1222,21 @@ upstream does not. The numbers never change; a new screen gets the next one.
 | 1 main menu | 11 *reserved* | 21 USB | 31 playback report |
 | 2 while playing | 12 option chooser | 22 album covers | 32 settings search |
 | 3 *unused* | 13 playlist catalogue | 23 text viewer | 33 featured artists |
-| 4 *unused* | 14 *unused* | 24 image viewer | 34 Spike |
+| 4 *unused* | 14 *unused* | 24 image viewer | 34 *unused* |
 | 5 playlist viewer | 15 context menu | 25 folder picker | 35 file search |
 | 6 settings | 16 system screen | 26 album charts | 36 playlist search |
 | 7 files | 17 time and date | 27 documents | 37 listening progress |
 | 8 database | 18 bookmarks | 28 images | 38 book shelf |
-| 9 *unused* | 19 shortcuts | 29 search | 39 music quiz |
+| 9 *unused* | 19 shortcuts | 29 search | 39 *unused* |
 
-3, 4, 9, 11 and 14 never come up in this build. A skin may test them; it will
+3, 4, 9, 11, 14, 34 and 39 never come up in this build. A skin may test them; it will
 never match.
 
 Two are worth knowing about before you write a branch for them:
 
 - **21, the USB screen, is never reached.** The firmware draws that screen
-  itself and your `.sbs` is not rendered at all while the cable is in. See §6 of
-  [`theme-guide.md`](theme-guide.md).
+  itself and your `.sbs` is not rendered at all while the cable is in. A theme
+  can give it a picture instead: see §6 of [`theme-guide.md`](theme-guide.md).
 - **22, the album covers carousel, draws only your status bar** — and only
   while `Settings > Appearance > Carousel > Status Bar` is on. The rest of the screen is the
   carousel's, coloured from the `.cfg` rather than from your skin.

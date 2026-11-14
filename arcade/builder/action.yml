@@ -1,0 +1,58 @@
+name: Build a PodBox Arcade cart
+description: Compiles a PodBox Arcade cart folder into a .pbg the iPod's Arcade plays, and optionally a web page to play it in
+author: PodBox
+
+inputs:
+  cart:
+    description: The cart's folder, the one holding cart.json
+    default: .
+  output:
+    description: Where to write the .pbg; the folder's name with .pbg when left out
+    default: ''
+  page:
+    description: true to write the cart as a web page too, beside the .pbg with .html
+    default: 'false'
+  scale:
+    description: "The web page's size: fit or whole to fill the window, or 1 to 4 times 160 by 120, smaller where the window is"
+    default: '3'
+
+outputs:
+  pbg:
+    description: The .pbg written
+    value: ${{ steps.build.outputs.pbg }}
+  page:
+    description: The web page written, when page is true
+    value: ${{ steps.build.outputs.page }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - id: build
+      shell: bash
+      env:
+        CART: ${{ inputs.cart }}
+        OUTPUT: ${{ inputs.output }}
+        PAGE: ${{ inputs.page }}
+        SCALE: ${{ inputs.scale }}
+      run: |
+        set -e
+        pbgc="$GITHUB_ACTION_PATH/pbgc.mjs"
+        dir="${CART%/}"
+        out="${OUTPUT:-$(basename "$(cd "$dir" && pwd)").pbg}"
+        node "$pbgc" build "$dir" -o "$out"
+        echo "pbg=$out" >> "$GITHUB_OUTPUT"
+        if [ "$PAGE" = true ]; then
+          page="${out%.pbg}.html"
+          # the text font goes in only for a cart whose text needs it: it
+          # makes the page much larger
+          node "$pbgc" html "$dir" -o "$page" --scale "$SCALE" 2> "$RUNNER_TEMP/page.err" ||
+            { cat "$RUNNER_TEMP/page.err" >&2; exit 1; }
+          if grep -q 'font.bin' "$RUNNER_TEMP/page.err"; then
+            node "$pbgc" html "$dir" -o "$page" --scale "$SCALE" \
+                --font "$GITHUB_ACTION_PATH/font.bin"
+          fi
+          echo "page=$page" >> "$GITHUB_OUTPUT"
+        fi

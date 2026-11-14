@@ -43,6 +43,10 @@ extern bool iap_accessory_present(void);
 extern void iap_periodic(void);
 extern void iap_handlepkt(void);
 extern void iap_send_pkt(const unsigned char * data, int len);
+/* Volume to the protocol's 0..255 scales: absolute over the codec's
+ * whole range, and UI normalised to the volume limit */
+unsigned char iap_volume_to_byte(int volume);
+unsigned char iap_volume_to_ui_byte(int volume);
 const unsigned char *iap_get_serbuf(void);
 #ifdef HAVE_LINE_REC
 extern bool iap_record(bool onoff);
@@ -51,6 +55,9 @@ void iap_reset_state(IF_IAP_MP_NONVOID(int port) ); /* 0 is dock, 1 is headphone
 /* USB power went: the session resets, as for an accessory that has gone,
  * but playback carries on */
 void iap_power_reset(void);
+/* Shutdown, after playback stopped: puts back shuffle and repeat set with
+ * Restore on Exit before the settings are written */
+void iap_prepare_shutdown(bool save_playlist);
 /* The player set the codec's volume, which ends an accessory's mute */
 void iap_volume_set(void);
 #ifdef HAVE_IAP_ACCESSORY_POLL

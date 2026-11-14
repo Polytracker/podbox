@@ -12,7 +12,7 @@
  *
  * Parts, in order:
  *   - the cart file and the save file
- *   - the engine's host, and the beat: Spike's clock and the beat tracker
+ *   - the engine's host, and the beat: the music clock and the beat tracker
  *   - sound: the cart's voices on the beep channel
  *   - present: the 8-bit screen and borders, doubled onto the panel
  *   - input: the buttons and the wheel, as btn() and wheel() see them
@@ -27,6 +27,7 @@
 #include "config.h"
 #include "system.h"           /* TIME_BEFORE, cpu_boost */
 #include "kernel.h"
+#include "usb.h"                /* usb_inserted */
 #include "lcd.h"
 #include "font.h"
 #include "button.h"
@@ -62,9 +63,9 @@
 #include "string-extra.h"     /* strmemccpy */
 #include "audio/beat_analyse.h"
 #include "audio/beat_track.h"
-#include "games/spike/spike_bar.h"
-#include "games/spike/spike_clock.h"
-#include "games/spike/spike_music.h"
+#include "games/arcade/music_bar.h"
+#include "games/arcade/music_clock.h"
+#include "games/arcade/music_mood.h"
 #include "audio/spectrum_meter.h"
 #include "database/path_key.h"
 #include "database/sound_index.h"
@@ -84,8 +85,6 @@
 /* Untouched this long, the game pauses: the pause menu hands the
  * backlight, the CPU and idle power-off back to their settings. */
 #define IDLE_PAUSE (5 * 60 * HZ)
-
-#define SAVE_DIR "/.rockbox/games/saves"
 
 
 /* ---- the cart file and the save file ------------------------------------- */
@@ -107,11 +106,51 @@ static uint32_t file_read(void *ctx, void *buf, uint32_t n)
     return got < 0 ? 0 : (uint32_t)got;
 }
 
+/* The cart file, opened again for the maps and images it reads as it
+ * plays: on the 5G a read may wait for the disk to spin up */
+static char cart_path[MAX_PATH];
+
+static uint32_t host_cart_read(void *ctx, uint32_t at, void *buf, uint32_t n)
+{
+    (void)ctx;
+    int fd = open(cart_path, O_RDONLY);
+    if (fd < 0)
+        return 0;
+    ssize_t got = lseek(fd, at, SEEK_SET) == (off_t)at ? read(fd, buf, n) : -1;
+    close(fd);
+    return got < 0 ? 0 : (uint32_t)got;
+}
+
+void shell_id_path(char *path, size_t size, const char *dir,
+                   const uint8_t *id, const char *ext)
+{
+    snprintf(path, size, "%s/%02x%02x%02x%02x%02x%02x%02x%02x%s", dir,
+             id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7], ext);
+}
+
+bool shell_write_file(const char *dir, const char *path, const void *a,
+                      size_t na, const void *b, size_t nb)
+{
+    char part[MAX_PATH];
+    mkdir("/.rockbox/games");
+    mkdir(dir);
+    snprintf(part, sizeof(part), "%s.new", path);
+    int fd = open(part, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0)
+        return false;
+    bool whole = write(fd, a, na) == (ssize_t)na &&
+                 (!nb || write(fd, b, nb) == (ssize_t)nb);
+    if (close(fd) < 0)
+        whole = false;
+    if (whole && rename(part, path) == 0)
+        return true;
+    remove(part);
+    return false;
+}
+
 static void save_path(struct vm *vm, char *path, size_t size)
 {
-    const uint8_t *id = arcade_id(vm);
-    snprintf(path, size, SAVE_DIR "/%02x%02x%02x%02x%02x%02x%02x%02x.sav",
-             id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
+    shell_id_path(path, size, SAVE_DIR, arcade_id(vm), ".sav");
 }
 
 /* The file: "PBGS", 256 little-endian values, then 32 bytes saying which
@@ -129,11 +168,8 @@ static void save_load(struct vm *vm)
     close(fd);
     if (got != (ssize_t)sizeof(b) || memcmp(b, "PBGS", 4))
         return;
-    for (int i = 0; i < 256; i++) {
-        const unsigned char *p = b + 4 + i * 4;
-        values[i] = (int32_t)(p[0] | (p[1] << 8) | (p[2] << 16) |
-                              ((uint32_t)p[3] << 24));
-    }
+    for (int i = 0; i < 256; i++)
+        values[i] = (int32_t)load_le32(b + 4 + i * 4);
     arcade_restore(vm, values, b + 4 + 256 * 4);
 }
 
@@ -144,7 +180,7 @@ static bool save_owed;
  * short write leaves the old save as it was */
 static void save_write(struct vm *vm)
 {
-    char path[MAX_PATH], part[MAX_PATH];
+    char path[MAX_PATH];
     unsigned char b[4 + 256 * 4 + 32];
     const uint8_t *frac;
     int dirty;
@@ -153,29 +189,12 @@ static void save_write(struct vm *vm)
         return;
     save_owed = true;
     memcpy(b, "PBGS", 4);
-    for (int i = 0; i < 256; i++) {
-        uint32_t v = (uint32_t)values[i];
-        unsigned char *p = b + 4 + i * 4;
-        p[0] = (unsigned char)v;
-        p[1] = (unsigned char)(v >> 8);
-        p[2] = (unsigned char)(v >> 16);
-        p[3] = (unsigned char)(v >> 24);
-    }
+    for (int i = 0; i < 256; i++)
+        store_le32(b + 4 + i * 4, (uint32_t)values[i]);
     memcpy(b + 4 + 256 * 4, frac, 32);
-    mkdir("/.rockbox/games");
-    mkdir(SAVE_DIR);
     save_path(vm, path, sizeof(path));
-    snprintf(part, sizeof(part), "%s.new", path);
-    int fd = open(part, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (fd < 0)
-        return;
-    bool whole = write(fd, b, sizeof(b)) == (ssize_t)sizeof(b);
-    if (close(fd) < 0)
-        whole = false;
-    if (whole && rename(part, path) == 0)
+    if (shell_write_file(SAVE_DIR, path, b, sizeof(b), NULL, 0))
         save_owed = false;
-    else
-        remove(part);
 }
 
 /* ---- the engine's host --------------------------------------------------- */
@@ -189,6 +208,12 @@ static void sound_fill(void);
 
 static struct vm *sound_vm;     /* while a cart runs and may sound */
 static long call_began;         /* the current tick of a call or dialog frame */
+
+void shell_walk_yield(void)
+{
+    call_began = current_tick;
+    yield();
+}
 
 static void host_yield(void *ctx)
 {
@@ -261,10 +286,10 @@ static int host_playing(void *ctx)
 }
 
 /* ---- the beat ---------------------------------------------------------------
- * beat, from what Spike plays by: its clock (track time steered by the
- * audio), the beat tracker and its analyser, its downbeat and its mood.
- * Beats are the tracker's, unshifted: what Spike's grid and animation
- * land on, and what its presses are judged against. The analyser runs only
+ * beat: the music clock (track time steered by the audio, music_clock.c),
+ * the beat tracker and its analyser, the downbeat (music_bar.c) and the
+ * mood (music_mood.c). Beats are the tracker's, unshifted: what a cart's
+ * presses are judged against. The analyser runs only
  * while the cart listens. The bar is counted from the tracker's lock
  * until the cart asks for the downbeat, and from the downbeat's time
  * after. */
@@ -276,10 +301,10 @@ static int32_t beat_press[5];   /* stamped as each button went down */
 
 static void beat_start(void)
 {
-    spk_clock_reset();
+    music_clock_reset();
     beat_track_reset();
-    spk_bar_reset();
-    spk_music_reset();
+    music_bar_reset();
+    music_mood_reset();
     beat_listening = false;
     beat_bar_ms = -1;
     beat_due = -1;
@@ -292,7 +317,7 @@ static void beat_listen(void *ctx, int on)
     (void)ctx;
     if (on && !beat_listening) {
         beat_analyse_start();
-        spk_bar_reset();
+        music_bar_reset();
         beat_bar_ms = -1;
     } else if (!on && beat_listening)
         beat_analyse_stop();
@@ -343,16 +368,16 @@ static int32_t beat_downbeat(void *ctx, int32_t *margin10)
     int bar, hits;
     beat_track_get(&bt);
     *margin10 = 0;
-    if (!bt.locked || !beat_track_next(spk_clock_ms(), 0, &at, &bar))
+    if (!bt.locked || !beat_track_next(music_clock_ms(), 0, &at, &bar))
         return -1;
     /* a beat the tracker counts as the first of four, twelve bars back:
      * the bar is found from the onsets since then, which have to span 32
      * beats */
     long zero = (long)at - ((long)bar + 48) * (long)bt.period_ms;
-    int rot = spk_bar_downbeat(zero, (int)bt.period_ms);
+    int rot = music_bar_downbeat(zero, (int)bt.period_ms);
     beat_bar_ms = rot < 0 ? -1 : zero + (long)rot * (long)bt.period_ms;
     int m;
-    spk_bar_working(&hits, &m);
+    music_bar_working(&hits, &m);
     *margin10 = m;
     return rot;
 }
@@ -360,14 +385,14 @@ static int32_t beat_downbeat(void *ctx, int32_t *margin10)
 static int32_t beat_now(void *ctx)
 {
     (void)ctx;
-    return (int32_t)spk_clock_now();
+    return (int32_t)music_clock_now();
 }
 
 static void beat_mood(void *ctx, int32_t out[3])
 {
     (void)ctx;
-    struct spk_mood m;
-    spk_music_get(&m);
+    struct music_mood m;
+    music_mood_get(&m);
     out[0] = m.energy;
     out[1] = m.flux;
     out[2] = m.trend;
@@ -468,7 +493,7 @@ static void beat_stamp(struct vm *vm, long b)
             b == BUTTON_MENU && arcade_menu_is_game(vm) ? 2 :
             b == BUTTON_PLAY ? 3 : b == BUTTON_SELECT ? 4 : -1;
     if (i >= 0 && beat_press[i] < 0)
-        beat_press[i] = (int32_t)spk_clock_now();
+        beat_press[i] = (int32_t)music_clock_now();
 }
 
 /* Before each tick: the clock carried to now, the analyser fed while the
@@ -478,7 +503,7 @@ static void beat_tick(struct vm *vm)
 {
     struct arcade_music m;
     ticks_heard++;
-    m.jumped = !spk_clock_tick();
+    m.jumped = !music_clock_tick();
     m.changed = shell_tracks_tick();
     if (m.jumped) {
         /* a seek, a skip, a new track: the tempo and the bar start again */
@@ -486,23 +511,23 @@ static void beat_tick(struct vm *vm)
             beat_analyse_start();
         else
             beat_track_reset();
-        spk_bar_reset();
-        spk_music_reset();
+        music_bar_reset();
+        music_mood_reset();
         beat_bar_ms = -1;
         beat_due = -1;
     }
     if (beat_listening) {
         beat_analyse_poll();
-        spk_bar_listen();
+        music_bar_listen();
     }
-    unsigned long now = spk_clock_ms(), at;
+    unsigned long now = music_clock_ms(), at;
     if (beat_due >= 0 && (long)now >= beat_due) {
-        spk_music_beat();
+        music_mood_beat();
         beat_due = -1;
     }
     if (beat_due < 0 && beat_track_next(now + 1, 0, &at, NULL))
         beat_due = (long)at;
-    unsigned long left = spk_clock_left_ms();
+    unsigned long left = music_clock_left_ms();
     m.clock = (int32_t)now;
     m.left = left > 0x7fffffff ? 0x7fffffff : (int32_t)left;
     for (int i = 0; i < 5; i++) {
@@ -574,7 +599,8 @@ static const struct arcade_host host = {
     NULL, host_print, host_yield, host_date, host_click, host_playing,
     &beat_host, host_setting, host_translate, host_control, &shell_tracks,
     host_frame, &speak_host, &shell_store, shell_glyph,
-    NULL, NULL                  /* watch and prof: the IDE's alone */
+    NULL, NULL,                 /* watch and prof: the IDE's alone */
+    host_cart_read
 };
 
 /* ---- sound -----------------------------------------------------------------
@@ -719,6 +745,27 @@ static int banner_due(struct vm *vm)
     return banner_rows;
 }
 
+/* The screen as last presented, a word at a time, once seen_valid; any
+ * present of the whole screen refreshes it. */
+static uint32_t seen[160 * 120 / 4];
+static bool seen_valid;
+/* the next of the rows that go every frame, SWEEP_ROWS of them */
+#define SWEEP_ROWS 4
+static int sweep;
+
+/* Whether the row now differs from the row was, n words each; a row that
+ * does is copied over was. */
+static bool row_changed(uint32_t *was, const uint32_t *now, int n)
+{
+    for (int i = 0; i < n; i += 4)
+        if ((was[i] ^ now[i]) | (was[i + 1] ^ now[i + 1]) |
+            (was[i + 2] ^ now[i + 2]) | (was[i + 3] ^ now[i + 3])) {
+            memcpy(was + i, now + i, (size_t)(n - i) * 4);
+            return true;
+        }
+    return false;
+}
+
 static void present(struct vm *vm, bool all)
 {
     const struct arcade_screen *s = arcade_screen(vm);
@@ -730,23 +777,54 @@ static void present(struct vm *vm, bool all)
     int r0 = all ? 0 : s->dirty_lo, r1 = all ? s->height - 1 : s->dirty_hi;
     int under = banner_due(vm);
     if (under) {
-        if (r0 > r1) {
-            r0 = 0;
+        if (r0 > r1 || r1 < under - 1)
             r1 = under - 1;
-        } else {
-            r0 = 0;
-            if (r1 < under - 1)
-                r1 = under - 1;
-        }
+        r0 = 0;
     }
-    if (r0 <= r1) {
-        int stride = (int)(FBADDR(0, 1) - FBADDR(0, 0));
-        present_wait();
-        present_rows(s, FBADDR(0, 0), stride, r0, r1);
+    /* Only the rows that differ from the frame last shown are converted,
+     * and the band from the first to the last of them sent: a game that
+     * redraws its whole screen changes few of its rows. SWEEP_ROWS rows go
+     * each frame whether or not they changed, so anything drawn over the
+     * game's screen is gone within 30 frames. */
+    bool fits = s->width * s->height <= (int)sizeof(seen) &&
+                !((uintptr_t)s->px & 3) && !(s->width & 15);
+    bool compare = !all && seen_valid && fits;
+    int sw0 = 0, sw1 = 0;
+    if (compare) {
+        sw0 = sweep;
+        sw1 = sweep + SWEEP_ROWS;
+        sweep = sw1 >= s->height ? 0 : sw1;
+    }
+    int stride = (int)(FBADDR(0, 1) - FBADDR(0, 0));
+    int first = -1, last = -1;
+    for (int y = 0; y < s->height; y++) {
+        bool dirty = y >= r0 && y <= r1, swept = y >= sw0 && y < sw1;
+        if (!dirty && !swept)
+            continue;
+        const uint8_t *now = s->px + y * s->width;
+        uint32_t *was = seen + y * s->width / 4;
+        if (compare && !swept) {
+            if (!row_changed(was, (const uint32_t *)now, s->width / 4))
+                continue;
+        } else if (fits)
+            memcpy(was, now, (size_t)s->width);
+        if (first < 0) {
+            present_wait();
+            first = y;
+        }
+        present_rows(s, FBADDR(0, 0), stride, y, y);
+        last = y;
+    }
+    /* the copy holds every row once a whole screen has gone */
+    if (!fits)
+        seen_valid = false;
+    else if (!compare && r0 == 0 && r1 == s->height - 1)
+        seen_valid = true;
+    if (first >= 0) {
 #ifdef HAVE_LCD_UPDATE_ASYNC
-        lcd_update_start(r0 * 2, (r1 - r0 + 1) * 2);
+        lcd_update_start(first * 2, (last - first + 1) * 2);
 #else
-        lcd_update_rect(0, r0 * 2, LCD_WIDTH, (r1 - r0 + 1) * 2);
+        lcd_update_rect(0, first * 2, LCD_WIDTH, (last - first + 1) * 2);
 #endif
     }
     if (banner_ach >= 0)
@@ -779,12 +857,14 @@ static void wheel_events(bool on)
 #endif
 }
 
-/* A cart that claims MENU gets it as it is let go, for one tick, so the
- * hold that opens the pause menu is never also a press in the game. */
-static bool menu_down, menu_paused;
+/* MENU held for a second opens the pause menu. Let go sooner, it is a
+ * press: a cart that claims MENU gets it, for one tick, and any other asks
+ * whether to quit. Either way the hold that opens the pause menu is never
+ * also a press. */
+static bool menu_down, menu_paused, menu_tapped;
 static long menu_since;
 
-/* True once a claimed MENU has been held for a second: the pause menu. */
+/* True once MENU has been held for a second: the pause menu. */
 static bool menu_held_long(int status)
 {
     if (!(status & BUTTON_MENU))
@@ -807,9 +887,11 @@ static unsigned buttons(struct vm *vm, int status)
     if (status & BUTTON_RIGHT)  held |= ARCADE_NEXT;
     if (status & BUTTON_PLAY)   held |= ARCADE_PLAY;
     if (status & BUTTON_SELECT) held |= ARCADE_SELECT;
-    if (arcade_menu_is_game(vm) && menu_down && !(status & BUTTON_MENU)) {
-        if (!menu_paused)
+    if (menu_down && !(status & BUTTON_MENU)) {
+        if (!menu_paused && arcade_menu_is_game(vm))
             held |= ARCADE_MENU;
+        else if (!menu_paused)
+            menu_tapped = true;
         menu_down = false;
     }
     return held;
@@ -893,6 +975,7 @@ static bool dialog_shown, dialog_to_root, dialog_open, dialog_took;
 static void remote_key(struct vm *vm, long b);
 static int event(struct vm *vm, long button);
 static int hold_pause(struct vm *vm, bool idle);
+static void pause_begin(struct vm *vm);
 static long dialog_touched;       /* the last input in a dialog */
 
 /* A frame of a dialog the engine drew on the game's screen (ui.*): shown,
@@ -942,10 +1025,16 @@ static int host_frame(void *ctx, unsigned *held, int *wheel)
     /* held or left alone, a dialog rests as the game does */
     bool idle = TIME_AFTER(current_tick, dialog_touched + IDLE_PAUSE);
     if (button_hold() || idle) {
+        /* a question asked in a pause holds the music already, and keeps
+         * holding it once the hold switch is off */
+        bool was_held = shell_tracks_held();
+        pause_begin(vm);
         if (hold_pause(vm, idle && !button_hold()) == USB) {
             dialog_to_root = true;
             return 0;
         }
+        if (!was_held)
+            shell_tracks_hold(false);
         /* the press that woke it is not also an answer */
         while (button_status())
             button_get_w_tmo(HZ / 20);
@@ -975,18 +1064,41 @@ static int event(struct vm *vm, long button)
     sound_stop();
     present_wait();
     save_write(vm);
+    shell_options_keep(vm);
     shell_scores_write(vm, false);
-    if (default_event_handler(button) == SYS_USB_CONNECTED)
+    /* the screen an event shows reads the wheel: the USB screen's wheel
+     * is the volume while the player is a sound card */
+    if (screen_held)
+        wheel_events(true);
+    int r = default_event_handler(button);
+    if (screen_held)
+        wheel_events(false);
+    if (r == SYS_USB_CONNECTED)
         return USB;
     present(vm, true);
     return PLAYING;
 }
 
+/* The saves first, as event() writes them; the game to resume only where
+ * none of the cart's code is running -- between ticks, in the pause menu or
+ * the hold pause -- since inside a call the arena is mid-step */
+void shell_power_off(void)
+{
+    struct vm *vm = sound_vm;
+    if (!vm)
+        return;
+    save_write(vm);
+    shell_options_keep(vm);
+    shell_scores_write(vm, false);
+    if (arcade_between_calls(vm))
+        shell_suspend_write(vm);
+}
+
 /* The pause menu's rows: Resume, the cart's own (menuitem), its options,
  * High Scores when it has boards, Help when it has any, Now Playing,
  * Restart, Quit. An option row is a setting, the rest plain. */
-enum { ROW_RESUME, ROW_ITEM, ROW_OPTION, ROW_SCORES, ROW_HELP, ROW_MUSIC,
-       ROW_RESTART, ROW_QUIT };
+enum { ROW_RESUME, ROW_ITEM, ROW_OPTION, ROW_SOUND, ROW_SCORES, ROW_HELP,
+       ROW_MUSIC, ROW_RESTART, ROW_QUIT };
 static char item_label[5][32];
 static int item_index[5];
 static int row_kind[1 + 5 + ARCADE_OPTIONS + 5], row_item[ARRAYLEN(row_kind)];
@@ -999,6 +1111,7 @@ static const char *menu_row(int row, void *data, char *buf, size_t len)
     case ROW_RESUME:  return str(LANG_CHESSBOX_MENU_RESUME_GAME);
     case ROW_ITEM:    return item_label[row_item[row]];
     case ROW_OPTION:  return shell_option_title(data, row_item[row]);
+    case ROW_SOUND:   return str(LANG_ARCADE_GAME_SOUND);
     case ROW_SCORES:  return str(LANG_HIGH_SCORES);
     case ROW_HELP:    return str(LANG_GAME_HELP);
     case ROW_MUSIC:   return str(LANG_NOW_PLAYING);
@@ -1009,12 +1122,18 @@ static const char *menu_row(int row, void *data, char *buf, size_t len)
 
 static enum list_row_kind menu_kind(int row, void *data)
 {
+    if (row_kind[row] == ROW_SOUND)
+        return LIST_ROW_TOGGLE;
     return row_kind[row] == ROW_OPTION
         ? shell_option_kind(data, row_item[row]) : LIST_ROW_PLAIN;
 }
 
 static const char *menu_value(int row, void *data, char *buf, size_t len)
 {
+    /* Yes and No, as an on/off option says them: a skin draws its switch
+     * for those words */
+    if (row_kind[row] == ROW_SOUND)
+        return str(arcade_muted(data) ? LANG_SET_BOOL_NO : LANG_SET_BOOL_YES);
     return row_kind[row] == ROW_OPTION
         ? shell_option_value(data, row_item[row], buf, len) : NULL;
 }
@@ -1070,6 +1189,15 @@ static bool music_menu(void)
     }
 }
 
+/* MENU in the pause menu, or in a list it opened, leaves the game as Quit
+ * does, back to the list the game was started from: for a game, that list
+ * is the root. A USB connection, which closes a list the same way, goes on
+ * to the root. */
+static int menu_out(void)
+{
+    return usb_inserted() ? USB : QUIT;
+}
+
 /* An item's function returning true keeps the menu up, relabelled, so a
  * cart can make a setting of its own; anything else resumes. */
 static int pause_menu(struct vm *vm, struct viewport *vp)
@@ -1079,6 +1207,7 @@ static int pause_menu(struct vm *vm, struct viewport *vp)
     sound_stop();
     present_wait();
     save_write(vm);
+    shell_options_keep(vm);
     shell_scores_run(false);
     shell_scores_write(vm, false);
     give_screen();
@@ -1094,6 +1223,7 @@ static int pause_menu(struct vm *vm, struct viewport *vp)
             }
         for (int i = 0; i < arcade_options(vm)->count; i++)
             add_row(ROW_OPTION, i);
+        add_row(ROW_SOUND, 0);
         if (arcade_scores(vm, NULL)->count || arcade_scores(vm, NULL)->nach)
             add_row(ROW_SCORES, 0);
         if (shell_has_help(vm))
@@ -1107,30 +1237,32 @@ static int pause_menu(struct vm *vm, struct viewport *vp)
         info.get_value = menu_value;
         info.get_range = menu_range;
         info.selection = selection;
-        bool to_root = shell_list(&info);
-        /* MENU held or USB: out to the root, as everywhere else */
-        if (to_root)
-            return USB;
+        if (shell_list(&info))
+            return menu_out();
         selection = info.selection;
         int kind = selection < 0 ? ROW_RESUME : row_kind[selection];
         if (kind == ROW_OPTION) {
             if (shell_option_edit(vm, row_item[selection]))
-                return USB;
+                return menu_out();
+            continue;
+        }
+        if (kind == ROW_SOUND) {
+            shell_mute_toggle(vm);
             continue;
         }
         if (kind == ROW_HELP) {
             if (shell_help(vm))
-                return USB;
+                return menu_out();
             continue;
         }
         if (kind == ROW_SCORES) {
             if (shell_scores_menu(vm))
-                return USB;
+                return menu_out();
             continue;
         }
         if (kind == ROW_MUSIC) {
             if (music_menu())
-                return USB;
+                return menu_out();
             continue;
         }
         if (kind == ROW_RESTART)
@@ -1180,6 +1312,14 @@ static void remote_key(struct vm *vm, long b)
     present(vm, true);
 }
 
+/* A pause, by the menu or the hold switch: the cart told, and music it
+ * owns held still until the game plays on */
+static void pause_begin(struct vm *vm)
+{
+    arcade_paused(vm);
+    shell_tracks_hold(true);
+}
+
 /* The hold switch: the game waits, the screen shows it, until released;
  * meanwhile the CPU and the backlight go back to their settings. Idle,
  * the same until a button or the wheel is touched. */
@@ -1189,6 +1329,7 @@ static int hold_pause(struct vm *vm, bool idle)
     sound_stop();
     present_wait();
     save_write(vm);
+    shell_options_keep(vm);
     shell_scores_run(false);
     shell_scores_write(vm, false);
     cpu_boost(false);
@@ -1211,7 +1352,7 @@ static int hold_pause(struct vm *vm, bool idle)
 
 /* Everything queued since the last frame. The buttons are read as held
  * state, so their events are only drained; system events are acted on. */
-static int drain(struct vm *vm, bool *menu_pressed)
+static int drain(struct vm *vm)
 {
     long b;
     while ((b = button_get(false)) != BUTTON_NONE) {
@@ -1223,8 +1364,6 @@ static int drain(struct vm *vm, bool *menu_pressed)
             remote_key(vm, b);
         } else {
             beat_stamp(vm, b);
-            if (b == BUTTON_MENU && !arcade_menu_is_game(vm))
-                *menu_pressed = true;
         }
     }
     return PLAYING;
@@ -1247,6 +1386,7 @@ static void show_error(struct vm *vm)
 static int run(const char *path, void *mem, size_t size)
 {
     struct viewport vp;
+    strmemccpy(cart_path, path, sizeof(cart_path));
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
         splashf(HZ * 3, "%s", path);
@@ -1279,17 +1419,21 @@ static int run(const char *path, void *mem, size_t size)
     banner_ach = -1;
     take_screen(&vp);
     sound_vm = vm;
+    /* the stall is timed from here: drawing the question below yields,
+     * and a time left from the last game would stop this one */
+    call_began = current_tick;
     /* suspended last time: asked over the game as it was left */
     if (resumed && !arcade_confirm(vm, str(LANG_GAME_RESUME_ASK),
                                    str(LANG_CHESSBOX_MENU_RESUME_GAME),
-                                   str(LANG_CHESSBOX_MENU_RESTART_GAME))) {
+                                   str(LANG_CHESSBOX_MENU_RESTART_GAME),
+                                   0)) {
         give_screen();
         sound_vm = NULL;
         shell_font_end();       /* the question may have opened it */
         return dialog_to_root ? USB : RESTART;
     }
     last_wheel = -1;
-    menu_down = menu_paused = false;
+    menu_down = menu_paused = menu_tapped = false;
     beat_start();
     shell_tracks_start();
     sound_path[0] = '\0';         /* the track's record is read afresh */
@@ -1327,16 +1471,14 @@ static int run(const char *path, void *mem, size_t size)
                 continue;
             }
             beat_stamp(vm, b);
-            if (b == BUTTON_MENU && !arcade_menu_is_game(vm))
-                menu_pressed = true;
-            if (TIME_BEFORE(current_tick, due) && !menu_pressed)
+            if (TIME_BEFORE(current_tick, due))
                 continue;
         }
-        status = drain(vm, &menu_pressed);
+        status = drain(vm);
         if (status != PLAYING)
             break;
 
-        if (arcade_menu_is_game(vm) && menu_held_long(button_status()))
+        if (menu_held_long(button_status()))
             menu_pressed = true;
         /* a finger on the wheel counts, though it sends no events */
         if (button_status() || wheel_position() >= 0) {
@@ -1345,24 +1487,55 @@ static int run(const char *path, void *mem, size_t size)
         } else if (TIME_AFTER(current_tick, touched + IDLE_PAUSE))
             menu_pressed = true;
         if (menu_pressed) {
+            pause_begin(vm);
             status = pause_menu(vm, &vp);
+            if (status == PLAYING)
+                shell_tracks_hold(false);
             suspend = status == QUIT;
             shell_scores_run(true);
-            spk_clock_resume();
+            music_clock_resume();
             start = current_tick - (long)((frame * HZ) / rate);
-            touched = current_tick;
+            touched = call_began = current_tick;
             continue;
         }
         if (button_hold()) {
+            pause_begin(vm);
             status = hold_pause(vm, false);
+            if (status == PLAYING)
+                shell_tracks_hold(false);
             shell_scores_run(true);
-            spk_clock_resume();
+            music_clock_resume();
             start = current_tick - (long)((frame * HZ) / rate);
-            touched = current_tick;
+            touched = call_began = current_tick;
             continue;
         }
 
         unsigned held = buttons(vm, button_status());
+        if (menu_tapped) {
+            /* asked over the game, in its own dialog style; a pause, as
+             * the pause menu is, so a round timed against the music is
+             * lost to it */
+            menu_tapped = false;
+            pause_begin(vm);
+            int yes = arcade_confirm(vm, str(LANG_ARCADE_QUIT_ASK),
+                                     str(LANG_SET_BOOL_YES),
+                                     str(LANG_SET_BOOL_NO), 1);
+            if (dialog_to_root) {
+                status = USB;
+                break;
+            }
+            if (yes) {
+                status = QUIT;
+                suspend = true;
+                break;
+            }
+            shell_tracks_hold(false);
+            music_clock_resume();
+            present(vm, true);
+            start = current_tick - (long)((frame * HZ) / rate);
+            touched = current_tick;
+            continue;
+        }
         int pos = wheel_position();
         frame++;
 
@@ -1371,7 +1544,10 @@ static int run(const char *path, void *mem, size_t size)
          * the clock gives up the time rather than racing to catch it. */
         long late = current_tick - (start + (long)((frame * HZ) / rate));
         if (late >= HZ / rate) {
-            arcade_skipped(vm, (unsigned)(late * rate / HZ));
+            /* rounded, and at least the frame not drawn: at 33 a tick is
+             * 3 of HZ, and 3 * 33 / 100 truncates to none */
+            long missed = (late * rate + HZ / 2) / HZ;
+            arcade_skipped(vm, missed > 1 ? (unsigned)missed : 1);
             arcade_input(vm, held, wheel_clicks(pos), pos);
             beat_tick(vm);
             call_began = current_tick;
@@ -1396,7 +1572,7 @@ static int run(const char *path, void *mem, size_t size)
         }
         if (dialog_shown) {
             dialog_shown = false;
-            spk_clock_resume();
+            music_clock_resume();
             start = current_tick - (long)((frame * HZ) / rate);
             touched = current_tick;
             if (dialog_to_root) {
@@ -1408,9 +1584,9 @@ static int run(const char *path, void *mem, size_t size)
         int rank, board = arcade_score_shown(vm, &rank);
         if (board >= 0) {
             status = show_scores(vm, &vp, board, rank);
-            spk_clock_resume();
+            music_clock_resume();
             start = current_tick - (long)((frame * HZ) / rate);
-            touched = current_tick;
+            touched = call_began = current_tick;
             continue;
         }
         sound_fill();
@@ -1423,6 +1599,10 @@ static int run(const char *path, void *mem, size_t size)
             status = QUIT;
     }
 
+    /* the game's last word, before its saves and any kept copy are
+     * written; not after it failed */
+    if (status != FAILED && !arcade_end(vm))
+        status = FAILED;
     if (status == FAILED)
         present(vm, false);
     beat_listen(NULL, 0);
@@ -1436,6 +1616,7 @@ static int run(const char *path, void *mem, size_t size)
         status = QUIT;
     }
     save_write(vm);
+    shell_options_keep(vm);
     shell_scores_run(false);
     shell_scores_write(vm, true);
     if (suspend)

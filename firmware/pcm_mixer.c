@@ -47,6 +47,7 @@ struct mixer_channel
     const struct mixer_play_cbs* play_cbs;  /* Registered callbacks */
     enum channel_status status;             /* Playback status */
     uint32_t amplitude;                     /* Amp. factor: 0x0000 = mute, 0x10000 = unity */
+    uint32_t written_amp;                   /* What the last samples were written with */
     const struct mixer_buffer_cbs* buf_cbs; /* Callback for new buffer */
 };
 
@@ -89,6 +90,35 @@ static inline unsigned int max_idle_frames(void)
 
 /** Mixing routines, CPU optmized **/
 #include "asm/pcm-mixer.c"
+
+/* A change of amplitude from one sample to the next is a step in the signal,
+   heard as a click unless it's silent, and a fade would be a row of those. So
+   the change is spread over the samples being written. Out of line and not
+   in IRAM: it runs only while an amplitude changes, and the 5G's IRAM has no
+   room for it, inlined into the callback or not. */
+#define AMP_RAMP_BYTES (16*4)
+
+static void NO_INLINE write_samples_ramp(void *out, const void *src,
+                                         int32_t from, int32_t to, size_t size)
+{
+    int steps = size / AMP_RAMP_BYTES;
+
+    if (steps > 1)
+    {
+        const int32_t delta = (to - from) / steps;
+
+        while (--steps > 0)
+        {
+            from += delta;
+            write_samples(out, src, from, AMP_RAMP_BYTES);
+            out += AMP_RAMP_BYTES;
+            src += AMP_RAMP_BYTES;
+            size -= AMP_RAMP_BYTES;
+        }
+    }
+
+    write_samples(out, src, to, size);
+}
 
 /** Private generic routines **/
 
@@ -195,10 +225,22 @@ fill_frame:
     if (LIKELY(*chan_p))
     {
         struct mixer_channel *chan = *chan_p++;
+        /* The last channel's amplitude, read once: a fade can change it
+         * between reads, and written_amp must be what was written */
+        unsigned int amp;
 
         if (LIKELY(!*chan_p))
         {
-            write_samples(mixptr, chan->start, chan->amplitude, mixsize);
+            amp = chan->amplitude;
+            if (LIKELY(amp == chan->written_amp))
+            {
+                write_samples(mixptr, chan->start, amp, mixsize);
+            }
+            else
+            {
+                write_samples_ramp(mixptr, chan->start, chan->written_amp,
+                                   amp, mixsize);
+            }
         }
         else
         {
@@ -208,6 +250,7 @@ fill_frame:
             /* Mix first two channels with each other as the downmix */
             src0 = chan->start;
             amp0 = chan->amplitude;
+            chan->written_amp = amp0;
             chan->last_size = mixsize;
 
             chan = *chan_p++;
@@ -222,6 +265,7 @@ fill_frame:
                     break;
 
                 /* More channels to mix - mix each with existing downmix */
+                chan->written_amp = amp1;
                 chan->last_size = mixsize;
                 chan = *chan_p++;
                 src0 = mixptr;
@@ -229,8 +273,10 @@ fill_frame:
                 src1 = chan->start;
                 amp1 = chan->amplitude;
             }
+            amp = amp1;
         }
 
+        chan->written_amp = amp;
         chan->last_size = mixsize;
         next_size += mixsize;
 
@@ -378,6 +424,7 @@ void mixer_channel_play_data(enum pcm_mixer_channel channel,
         chan->size = size;
         chan->last_size = 0;
         chan->play_cbs = cbs;
+        chan->written_amp = chan->amplitude; /* Nothing to go on from */
 
         mixer_activate_channel(chan);
         chan_call_buffer_hook(chan);

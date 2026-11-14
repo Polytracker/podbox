@@ -162,13 +162,14 @@ static int remap_of(struct vm *vm, struct value *a, int argc, int i,
     return 1;
 }
 
-/* plane.fog(near, far, colour): the ground from near to far world pixels
- * away goes to colour, dithered, as distance does -- it hides the shimmer
- * of texels skipped near the horizon; a colour of -1 turns it off. Kept
- * until changed; plane.draw and land.draw use it. */
+/* plane.fog(near, far, colour, [billboards]): the ground from near to far
+ * world pixels away goes to colour, dithered, as distance does -- it hides
+ * the shimmer of texels skipped near the horizon; a colour of -1 turns it
+ * off. The billboards fade with it unless billboards is false. Kept until
+ * changed; plane.draw and land.draw use it. */
 NATIVE(plane_fog)
 {
-    (void)argc; (void)out;
+    (void)out;
     for (int i = 0; i < 3; i++)
         if (!is_num(a[i]))
             return vm_fail(vm, "plane.fog() needs near, far and a colour", "",
@@ -179,6 +180,7 @@ NATIVE(plane_fog)
     v->fog_near = fx(a[0]);
     v->fog_far = fx(a[1]);
     v->fog_colour = (uint8_t)(c & 0xff);
+    v->fog_billboards = argc < 4 || a[3].tag == T_NULL || vm_truthy(vm, a[3]);
     vm_charge(vm, 4);
     return 1;
 }
@@ -380,9 +382,11 @@ NATIVE(plane_billboards)
         core_draw_billboard(vm, column_at(&c[3], i, 0), px[i], py[i], pw[i],
                             ph[i], column_at(&c[6], i, 1),
                             column_at(&c[7], i, 1),
-                            column_true(vm, &c[5], i, 0), dep[i]);
+                            column_at(&c[5], i, 0) & 3, dep[i]);
     }
-    vm_charge(vm, 10 + (uint32_t)n * 4);
+    /* each billboard's projection and sizing, its 64-bit divides most of
+     * it: about 17 units beside its copy, timed on the 5G */
+    vm_charge(vm, 10 + (uint32_t)n * 17);
     *out = mk(T_INT, k);
     return 1;
 }

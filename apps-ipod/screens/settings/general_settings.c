@@ -1020,7 +1020,19 @@ MENUITEM_FUNCTION_DYNTEXT_W_PARAM(hotkey_wps_item, 0,
                                   wps_button_get_name,
                                   wps_button_speak_item,
                                   (void*)LANG_HOTKEY_WPS, NULL, Icon_NOICON);
-MENUITEM_SETTING(wps_menu_action, &global_settings.wps_menu_action, NULL);
+MENUITEM_FUNCTION_DYNTEXT_W_PARAM(wps_menu_action, 0,
+                                  wps_menu_do_setting, (void*)0,
+                                  wps_button_get_name,
+                                  wps_button_speak_item,
+                                  (void*)LANG_WPS_MENU_ACTION, NULL,
+                                  Icon_NOICON);
+MENUITEM_FUNCTION_DYNTEXT_W_PARAM(wps_long_press_play_action, 0,
+                                  wps_long_press_play_do_setting, (void*)0,
+                                  wps_button_get_name,
+                                  wps_button_speak_item,
+                                  (void*)LANG_WPS_LONG_PRESS_PLAY_ACTION, NULL,
+                                  Icon_NOICON);
+MENUITEM_SETTING(go_to_album_via, &global_settings.go_to_album_via, NULL);
 
 
 /* Which picture the screen shows, and where its album cover is looked for
@@ -1043,6 +1055,8 @@ MAKE_MENU(wps_settings, ID2P(LANG_WPS), 0, Icon_Playback_menu
             ,&wps_select_action
             ,&hotkey_wps_item
             ,&wps_menu_action
+            ,&wps_long_press_play_action
+            ,&go_to_album_via
             ,&wps_appearance_link
             );
 
@@ -1171,38 +1185,11 @@ MENUITEM_SETTING(segregate_audiobooks, &global_settings.segregate_audiobooks,
                  NULL);
 MENUITEM_SETTING(segregate_podcasts, &global_settings.segregate_podcasts,
                  NULL);
-/* The Music Quiz's kinds of question. One always stays on: turning off the
- * last is put back, since a quiz asking nothing cannot be played. */
-static int quiz_kind_callback(int action, const struct menu_item_ex *this_item,
-                              struct gui_synclist *this_list)
-{
-    (void)this_list;
-
-    if (action == ACTION_EXIT_MENUITEM
-        && !global_settings.quiz_title && !global_settings.quiz_artist
-        && !global_settings.quiz_album && !global_settings.quiz_year)
-    {
-        *(bool *)this_item->variable = true;
-        settings_save();
-        splash(HZ * 2, ID2P(LANG_QUIZ_ONE_KIND));
-    }
-    return action;
-}
-
-MENUITEM_SETTING(quiz_title, &global_settings.quiz_title, quiz_kind_callback);
-MENUITEM_SETTING(quiz_artist, &global_settings.quiz_artist,
-                 quiz_kind_callback);
-MENUITEM_SETTING(quiz_album, &global_settings.quiz_album, quiz_kind_callback);
-MENUITEM_SETTING(quiz_year, &global_settings.quiz_year, quiz_kind_callback);
-MAKE_MENU(quiz_menu, ID2P(LANG_QUIZ_QUESTIONS), 0, Icon_NOICON,
-          &quiz_title, &quiz_artist, &quiz_album, &quiz_year);
-
 MAKE_MENU(music_menu, ID2P(LANG_MUSIC_BROWSER), 0, Icon_NOICON,
           &music_sort_menu,
           &album_show_year,
           &extra_rows_menu,
           &featured_artists, &segregate_audiobooks, &segregate_podcasts,
-          &quiz_menu,
           &music_appearance_menu    /* theme_settings.c */
           );
 

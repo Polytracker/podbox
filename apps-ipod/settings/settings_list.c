@@ -570,6 +570,8 @@ struct eq_band_setting eq_defaults[EQ_NUM_BANDS] = {
    of the WPS context menu. */
 static const int wps_context_menu_default = HK_CTX_SET(0, HOTKEY_LYRICS);
 static const int wps_select_default = HK_CTX_SET(0, HOTKEY_PREVIOUS_BROWSER);
+static const int wps_menu_default = HK_CTX_SET(0, HOTKEY_PREVIOUS_SCREEN);
+static const int wps_long_press_play_default = HK_CTX_SET(0, HOTKEY_ALBUM_COVERS);
 
 static const int tree_hotkey_default = HOTKEY_OFF;
 static const uint32_t context_hidden_default = 0;
@@ -1439,16 +1441,6 @@ const struct settings_list settings[] = {
                   "continue playing", NULL),
     OFFON_SETTING(0, mix_starts_with_selected, LANG_MIX_STARTS_WITH_SELECTED,
                   true, "mix starts with selected", NULL),
-    /* Year is off by default: it is the hard one, and the one that depends on
-     * the tags being right. */
-    OFFON_SETTING(F_BANFROMQS, quiz_title, LANG_QUIZ_KIND_TITLE, true,
-                  "quiz title", NULL),
-    OFFON_SETTING(F_BANFROMQS, quiz_artist, LANG_QUIZ_KIND_ARTIST, true,
-                  "quiz artist", NULL),
-    OFFON_SETTING(F_BANFROMQS, quiz_album, LANG_QUIZ_KIND_ALBUM, true,
-                  "quiz album", NULL),
-    OFFON_SETTING(F_BANFROMQS, quiz_year, LANG_QUIZ_KIND_YEAR, false,
-                  "quiz year", NULL),
     CHOICE_SETTING(0, analysis_depth, LANG_ANALYSIS_DEPTH,
                    ANALYSIS_THOROUGH, "analysis depth", "thorough,quick",
                    NULL, 2,
@@ -1582,8 +1574,10 @@ const struct settings_list settings[] = {
 #undef EQ_BAND
 
     /* dithering */
-    OFFON_SETTING(F_SOUNDSETTING, dithering_enabled, LANG_DITHERING, false,
-                  "dithering enabled", dsp_dither_enable),
+    CHOICE_SETTING(F_SOUNDSETTING, dithering_enabled, LANG_DITHERING,
+                   DITHER_OFF, "dithering enabled", "off,on,auto",
+                   dsp_dither_enable, 3, ID2P(LANG_OFF), ID2P(LANG_ALWAYS),
+                   ID2P(LANG_AUTO)),
     /* surround */
      TABLE_SETTING(F_TIME_SETTING | F_SOUNDSETTING, surround_enabled,
                   LANG_SURROUND, 0, "surround enabled", off,
@@ -1931,6 +1925,8 @@ const struct settings_list settings[] = {
      * the last theme's image showing through everything it draws. */
     TEXT_SETTING(F_THEMESETTING|F_THEMERESET|F_NEEDAPPLY,backdrop_file,"backdrop",
                      DEFAULT_BACKDROP, NULL, NULL),
+    TEXT_SETTING(F_THEMESETTING|F_THEMERESET|F_NEEDAPPLY, usb_image_file,
+                 "usb image", "-", NULL, NULL),
     TEXT_SETTING(0,kbd_file,"kbd","-",ROCKBOX_DIR "/",".kbd"),
     CHOICE_SETTING(0, usb_charging, LANG_USB_CHARGING, TARGET_USB_CHARGING_DEFAULT, "usb charging",
                    "off,on,force", NULL, 3, ID2P(LANG_SET_BOOL_NO),
@@ -1971,9 +1967,21 @@ const struct settings_list settings[] = {
                    &wps_select_default, "wps select action",
                    wps_context_menu_load_from_cfg, wps_context_menu_write_to_cfg,
                    wps_context_menu_is_changed, wps_context_menu_set_default),
-    CHOICE_SETTING(0, wps_menu_action, LANG_WPS_MENU_ACTION, WPS_MENU_PREVIOUS,
-                   "wps menu action", "previous,root", NULL, 2,
-                   ID2P(LANG_BACK_PREVIOUS_SCREEN), ID2P(LANG_MAIN_MENU)),
+    CUSTOM_SETTING(0, wps_menu_action, LANG_WPS_MENU_ACTION,
+                   &wps_menu_default, "wps menu action",
+                   wps_context_menu_load_from_cfg, wps_context_menu_write_to_cfg,
+                   wps_context_menu_is_changed, wps_context_menu_set_default),
+    CUSTOM_SETTING(0, wps_long_press_play_action,
+                   LANG_WPS_LONG_PRESS_PLAY_ACTION,
+                   &wps_long_press_play_default, "wps long press play action",
+                   wps_context_menu_load_from_cfg, wps_context_menu_write_to_cfg,
+                   wps_context_menu_is_changed, wps_context_menu_set_default),
+    TEXT_SETTING(0, theme_toggle, "theme toggle", "", NULL, NULL),
+    CHOICE_SETTING(0, go_to_album_via, LANG_GO_TO_ALBUM_VIA, ALBUM_VIA_DIRECT,
+                   "go to album via", "direct,album,album artist,artist,genre",
+                   NULL, 5, ID2P(LANG_DIRECT), ID2P(LANG_ID3_ALBUM),
+                   ID2P(LANG_ID3_ALBUMARTIST), ID2P(LANG_ID3_ARTIST),
+                   ID2P(LANG_ID3_GENRE)),
 
     /* Customizable icons */
     TEXT_SETTING(F_THEMESETTING|F_NEEDAPPLY, icon_file, "iconset", DEFAULT_ICONSET,
@@ -2231,10 +2239,16 @@ const struct settings_list settings[] = {
                   true, "database album art", NULL),
     OFFON_SETTING(F_THEMESETTING|F_THEMERESET, db_artistart, LANG_DB_ARTIST_ART,
                   false, "database artist art", NULL),
+    /* This and "database author cover" are the owner's choice about their
+     * library, not the theme's, so a theme neither sets nor resets them */
+    OFFON_SETTING(0, db_artist_cover, LANG_DB_ARTIST_COVER,
+                  false, "database artist cover", NULL),
     OFFON_SETTING(F_THEMESETTING|F_THEMERESET, db_bookart, LANG_DB_BOOK_ART,
                   true, "database audiobook art", NULL),
     OFFON_SETTING(F_THEMESETTING|F_THEMERESET, db_authorart, LANG_DB_AUTHOR_ART,
                   false, "database author art", NULL),
+    OFFON_SETTING(0, db_author_cover, LANG_DB_AUTHOR_COVER,
+                  false, "database author cover", NULL),
     OFFON_SETTING(F_THEMESETTING|F_THEMERESET, db_ebookart, LANG_DB_EBOOK_ART,
                   true, "database book art", NULL),
     OFFON_SETTING(F_THEMESETTING|F_THEMERESET, db_ebookauthorart,
@@ -2418,12 +2432,6 @@ const struct settings_list settings[] = {
     CHOICE_SETTING(0, spun_rank_by, LANG_SPUN_RANK_BY, 0, "spun rank by",
                    "plays,minutes", NULL, 2,
                    ID2P(LANG_SPUN_RANK_PLAYS), ID2P(LANG_SPUN_RANK_MINUTES)),
-    CHOICE_SETTING(0, spike_caption, LANG_SPIKE_CAPTION, 0, "spike caption",
-                   "off,title,title and artist", NULL, 3,
-                   ID2P(LANG_OFF), ID2P(LANG_SPIKE_CAPTION_TITLE),
-                   ID2P(LANG_SPIKE_CAPTION_BOTH)),
-    OFFON_SETTING(0, spike_caption_scroll, LANG_SPIKE_CAPTION_SCROLL, false,
-                  "spike caption scroll", NULL),
 };
 
 const int nb_settings = sizeof(settings)/sizeof(*settings);

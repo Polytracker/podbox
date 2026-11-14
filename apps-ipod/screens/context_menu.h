@@ -31,6 +31,7 @@ enum {
     ONPLAY_FUNC_RETURN, /* for use in hotkey_assignment only */
     ONPLAY_SELECT,      /* Select...: the list turns into a selecting one */
     ONPLAY_LEAVE,       /* Now Playing leaves for context_menu_leave_for() */
+    ONPLAY_STOP,        /* Now Playing stops playback, through its own exit */
 };
 
 /* Runs Now Playing's button action 'act' on the playing 'file': the
@@ -69,6 +70,11 @@ enum hotkey_action {
     HOTKEY_FILES,
     HOTKEY_THEME_OPTIONS,
     HOTKEY_PREVIOUS_SCREEN,
+    HOTKEY_GO_TO_ALBUM,
+    HOTKEY_MAIN_MENU,
+    HOTKEY_STOP,
+    HOTKEY_ADD_TO_PLAYLIST,
+    HOTKEY_THEME_TOGGLE,
     HOTKEY_ARTIST_BIO,
     HOTKEY_LINER_NOTES,
     /* Append here, never insert: these values are packed HK_CTX_BITS at a
@@ -82,6 +88,7 @@ enum hotkey_flags {
     HOTKEY_FLAG_WPS = 0x1,
     HOTKEY_FLAG_TREE = 0x2,
     HOTKEY_FLAG_NOSBS = 0x4,
+    HOTKEY_FLAG_LEAVES = 0x8,   /* leaves Now Playing: Menu offers only these */
 };
 
 struct hotkey_assignment {
@@ -93,8 +100,9 @@ struct hotkey_assignment {
     uint8_t icon;           /* themable_icons value shown beside the entry */
 };                          /* (Pick ONPLAY_FUNC_RETURN to use function's return value) */
 
-/* The hotkey settings -- Now Playing's Select and Select + Play, and the
-   file browser's hotkey -- hold their action as item 0 of an int. */
+/* The hotkey settings -- Now Playing's Select, Select + Play, Menu and long
+   press of Play, and the file browser's hotkey -- hold their action as item 0
+   of an int. */
 #define HK_CTX_MASK  (0x3F)
 #define HK_CTX_BITS  (6) /* 6 bits, enough for 62 hotkey actions */
 #define HK_CTX_SET(item, hotkey) ((hotkey & HK_CTX_MASK) << (item * HK_CTX_BITS))
@@ -137,6 +145,8 @@ void context_hidden_set_default(void *setting, void *defaultval);
 
 /* Assign a hotkey's action, driven from the settings menu. */
 int wps_select_do_setting(void *param);
+int wps_menu_do_setting(void *param);
+int wps_long_press_play_do_setting(void *param);
 int wps_context_menu_do_setting(void *param);
 int tree_context_menu_do_setting(void *param);
 

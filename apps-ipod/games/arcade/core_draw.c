@@ -70,9 +70,13 @@ static void reset_palettes(struct draw *d)
 static const uint16_t *xlat_of(struct draw *d)
 {
     if (d->xlat_stale) {
-        for (int c = 0; c < 256; c++)
+        int plain = 1;
+        for (int c = 0; c < 256; c++) {
             d->xlat[c] = d->transparent[c >> 3] & (1 << (c & 7))
                          ? XLAT_CLEAR : d->dpal[c];
+            plain &= d->xlat[c] == c;
+        }
+        d->xlat_plain = (uint8_t)plain;
         d->xlat_stale = 0;
     }
     return d->xlat;
@@ -103,7 +107,7 @@ static uint32_t region(struct vm *vm, uint32_t bytes)
 }
 
 /* ---- assets -------------------------------------------------------------- *
- * The chunks' layouts are tools/arcade/src/assets.js's. Each is checked
+ * The chunks' layouts are arcade/sdk/src/assets.js's. Each is checked
  * whole when the cart loads, so the natives below can trust them. */
 
 static uint32_t le16(const uint8_t *p)
@@ -111,23 +115,18 @@ static uint32_t le16(const uint8_t *p)
     return p[0] | (uint32_t)p[1] << 8;
 }
 
-static uint32_t le32(const uint8_t *p)
-{
-    return le16(p) | le16(p + 2) << 16;
-}
-
 static int damaged(struct vm *vm, const char *what)
 {
     return vm_fail(vm, "this game file is damaged: ", what, "");
 }
 
-/* Palette n's colours and how many, or NULL */
-static const uint8_t *palette_at(const struct vm *vm, uint32_t n,
+/* Palette n's colours and how many, or NULL, from a PALS chunk */
+static const uint8_t *palette_in(const uint8_t *p, uint32_t len, uint32_t n,
                                  uint32_t *count)
 {
-    const uint8_t *p = vm->pals, *end = p + vm->pals_len;
+    const uint8_t *end = p + len;
     *count = 0;
-    if (!p || vm->pals_len < 1 || n >= p[0])
+    if (!p || len < 1 || n >= p[0])
         return NULL;
     p++;
     for (uint32_t i = 0;; i++) {
@@ -142,6 +141,42 @@ static const uint8_t *palette_at(const struct vm *vm, uint32_t n,
         }
         p += 2 + k * 3;
     }
+}
+
+static const uint8_t *palette_at(const struct vm *vm, uint32_t n,
+                                 uint32_t *count)
+{
+    return palette_in(vm->pals, vm->pals_len, n, count);
+}
+
+/* A cart's logo, read without loading the cart: the LOGO chunk's picture
+ * in the colours of its first palette (PALS, or PodBox's sixteen without
+ * one), 0xRRGGBB a pixel into rgb. 1 when it fitted in cap pixels whole. */
+int arcade_logo_rgb(const uint8_t *logo, uint32_t logo_len,
+                    const uint8_t *pals, uint32_t pals_len,
+                    uint32_t *rgb, uint32_t cap, int *w, int *h)
+{
+    static uint8_t px[ARCADE_LOGO_SIZE * ARCADE_LOGO_SIZE];
+    uint32_t k = 0, pw, ph, n;
+    const uint8_t *pal = palette_in(pals, pals_len, 0, &k);
+    if (!logo || logo_len < 8)
+        return 0;
+    pw = le16(logo);
+    ph = le16(logo + 2);
+    n = le16(logo + 4) | le16(logo + 6) << 16;
+    if (!pw || !ph || pw * ph > cap || pw * ph > sizeof(px) ||
+        n > logo_len - 8 || !lz4_decode(logo + 8, n, px, pw * ph))
+        return 0;
+    for (uint32_t i = 0; i < pw * ph; i++) {
+        uint32_t c = px[i];
+        rgb[i] = pal ? (c < k ? (uint32_t)pal[c * 3] << 16 |
+                                (uint32_t)pal[c * 3 + 1] << 8 | pal[c * 3 + 2]
+                              : 0)
+                     : c < 16 ? default_rgb[c] : 0;
+    }
+    *w = (int)pw;
+    *h = (int)ph;
+    return 1;
 }
 
 static void use_palette(struct vm *vm, const uint8_t *rgb, uint32_t k)
@@ -172,13 +207,23 @@ static int read_maps(struct vm *vm, uint32_t *cap)
             return damaged(vm, "maps");
         m->w = (uint16_t)le16(p);
         m->h = (uint16_t)le16(p + 2);
-        m->zlen = le32(p + 4);
+        m->zlen = rd_le32(p + 4);
         p += 8;
-        if (!m->w || !m->h || m->w > MAP_MAX || m->h > MAP_MAX ||
-            m->zlen > (uint32_t)(end - p))
+        if (!m->w || !m->h || m->w > MAP_MAX || m->h > MAP_MAX)
             return damaged(vm, "maps");
-        m->z = p;
-        p += m->zlen;
+        /* format 3 leaves the cells in the file, a chunk a map */
+        if (vm->format >= 3) {
+            if (i >= vm->nmapc || m->zlen != vm->mapc[i].len)
+                return damaged(vm, "maps");
+            m->z = NULL;
+            m->lazy = (int32_t)i;
+        } else {
+            if (m->zlen > (uint32_t)(end - p))
+                return damaged(vm, "maps");
+            m->z = p;
+            m->lazy = -1;
+            p += m->zlen;
+        }
         if (end - p < 2)
             return damaged(vm, "maps");
         m->nobj = (uint16_t)le16(p);
@@ -211,13 +256,25 @@ static int read_maps(struct vm *vm, uint32_t *cap)
     return 1;
 }
 
+/* A map's cells unpacked into dst, read from the cart file when it left
+ * them there */
+static int map_cells(struct vm *vm, const struct mapinfo *m, uint8_t *dst,
+                     uint32_t cells)
+{
+    if (m->lazy >= 0)
+        return lazy_unpack(vm, &vm->mapc[m->lazy], dst, cells);
+    if (!lz4_decode(m->z, m->zlen, dst, cells))
+        return damaged(vm, "a map");
+    return 1;
+}
+
 /* Map n becomes the active one, as stored */
 static int use_map(struct vm *vm, uint32_t n)
 {
     const struct mapinfo *m = &vm->mapdir[n];
     uint32_t cells = (uint32_t)m->w * m->h;
-    if (!lz4_decode(m->z, m->zlen, MEM(vm, vm->map), cells))
-        return damaged(vm, "a map");
+    if (!map_cells(vm, m, MEM(vm, vm->map), cells))
+        return 0;
     vm->map_w = m->w;
     vm->map_h = m->h;
     vm->active_map = (int32_t)n;
@@ -231,15 +288,18 @@ static int read_sheet(struct vm *vm)
     if (!p)
         return 1;
     if (vm->shet_len < 8 || le16(p) != SHEET_W || le16(p + 2) != SHEET_H ||
-        le32(p + 4) > vm->shet_len - 8 ||
-        vm->shet_len - 8 - le32(p + 4) != 256 ||
-        !lz4_decode(p + 8, le32(p + 4), MEM(vm, vm->sheet), SHEET_W * SHEET_H))
+        rd_le32(p + 4) > vm->shet_len - 8 ||
+        vm->shet_len - 8 - rd_le32(p + 4) != 256 ||
+        !lz4_decode(p + 8, rd_le32(p + 4), MEM(vm, vm->sheet), SHEET_W * SHEET_H))
         return damaged(vm, "the sheet");
-    memcpy(MEM(vm, vm->flags), p + 8 + le32(p + 4), 256);
+    memcpy(MEM(vm, vm->flags), p + 8 + rd_le32(p + 4), 256);
     return 1;
 }
 
-/* Each image as an img outside the heap, and the globals IMG.* name */
+/* Each image as an img outside the heap, and the globals IMG.* name. In
+ * format 3 an image flagged lazy is left in the file, a chunk of its own,
+ * and named by a T_LAZY of its struct lazyimg until img.load(). */
+#define OFF_LAZY 0x80000000u        /* in offs: the image is a lazyimg */
 static int read_images(struct vm *vm)
 {
     const uint8_t *p = vm->imgs, *end = p + vm->imgs_len;
@@ -253,13 +313,41 @@ static int read_images(struct vm *vm)
         if (!at)
             return 0;
         offs = MEM(vm, at);
+        if (vm->format >= 3 && vm->nimgc) {
+            at = perm_alloc(vm, vm->nimgc * sizeof(struct lazyimg) + 8);
+            if (!at)
+                return 0;
+            vm->lazyimgs = MEM(vm, at);
+        }
         for (uint32_t i = 0; i < n; i++) {
             if (end - p < 8)
                 return damaged(vm, "images");
-            uint32_t w = le16(p), h = le16(p + 2), zlen = le32(p + 4);
+            uint32_t w = le16(p), h = le16(p + 2), zlen = rd_le32(p + 4);
             p += 8;
-            if (!w || !h || w > IMAGE_MAX || h > IMAGE_MAX ||
-                zlen > (uint32_t)(end - p))
+            uint32_t flags = 0;
+            if (vm->format >= 3) {
+                if (end - p < 1)
+                    return damaged(vm, "images");
+                flags = *p++;
+            }
+            if (!w || !h || w > IMAGE_MAX || h > IMAGE_MAX)
+                return damaged(vm, "images");
+            if (flags & 1) {
+                uint32_t k = vm->nlazyimgs;
+                if (k >= vm->nimgc || zlen != vm->imgc[k].len ||
+                    !lazy_unpack(vm, &vm->imgc[k], NULL, 0))
+                    return damaged(vm, "images");
+                struct lazyimg *r = &vm->lazyimgs[k];
+                r->w = (uint16_t)w;
+                r->h = (uint16_t)h;
+                r->chunk = (uint16_t)k;
+                r->slot = 0xffff;
+                r->copy = 0;
+                vm->nlazyimgs++;
+                offs[i] = OFF_LAZY | (uint32_t)((uint8_t *)r - vm->mem);
+                continue;
+            }
+            if (zlen > (uint32_t)(end - p))
                 return damaged(vm, "images");
             uint32_t bytes = (uint32_t)sizeof(struct img) + w * h;
             uint32_t off = perm_alloc(vm, bytes);
@@ -280,7 +368,12 @@ static int read_images(struct vm *vm)
         uint32_t slot = vm->img_globals[i * 2], img = vm->img_globals[i * 2 + 1];
         if (slot >= vm->nglobals || img >= n)
             return damaged(vm, "images");
-        vm->globals[slot] = mk(T_IMG, (int32_t)offs[img]);
+        if (offs[img] & OFF_LAZY) {
+            uint32_t off = offs[img] & ~OFF_LAZY;
+            ((struct lazyimg *)MEM(vm, off))->slot = (uint16_t)slot;
+            vm->globals[slot] = mk(T_LAZY, (int32_t)off);
+        } else
+            vm->globals[slot] = mk(T_IMG, (int32_t)offs[img]);
     }
     return 1;
 }
@@ -371,10 +464,10 @@ ARG_INLINE int colour(struct vm *vm, struct value *a, int argc, int i,
     return 1;
 }
 
-static int flag(struct vm *vm, struct value *a, int argc, int i)
-{
-    return i < argc && vm_truthy(vm, a[i]);
-}
+/* A flip, as every call takes one: 1 across, 2 up and down, 3 both; true
+ * is 1. */
+#define FLIP_X(f) ((f) & 1)
+#define FLIP_Y(f) (((f) >> 1) & 1)
 
 #define WHOLE(i, def, x, fn) int32_t x; \
     if (!whole(vm, a, argc, i, def, fn, &x)) return 0
@@ -387,18 +480,25 @@ static int flag(struct vm *vm, struct value *a, int argc, int i)
  * call's setup, then each row a shape works out, glyph or map tile, and
  * each pixel by its kind as units per 16 pixels -- the pixels drawn, or
  * for copies and tline the pixels read, which cost the same whether or
- * not they are transparent. */
+ * not they are transparent. Rectangles, copies, sprites, map tiles and
+ * text are timed on the player (the Timing cart, 2026-11-09). */
 #define COST_CALL      20
-#define COST_COPY      25   /* copy_rect's setup, on top of the call's */
+#define COST_COPY      60   /* copy_rect's setup, on top of the call's */
+#define COST_SMALL     6    /* small_sprite's, in its place: measured */
+#define COST_SPRITE    18   /* spr's of an 8x8 tile, on top of tile8's */
+#define COST_RECT      10   /* rect's and rectfill's, on top of the call's */
 #define COST_ROW       2
-#define COST_GLYPH     12
-#define COST_BIG_GLYPH 36
-#define COST_TEXT_GLYPH 20  /* FONT.WORLD's and a cart font's */
+#define CLS_PIXELS     110  /* cls's pixels a unit */
+#define COST_GLYPH     11
+#define COST_BIG_GLYPH 56
+#define COST_TEXT_GLYPH 26  /* FONT.WORLD's and a cart font's */
 #define COST_TILE      5
-#define PER16_FILL     1
+#define FILL256        4    /* a memset's pixels, per 256: about 1 cycle each */
 #define PER16_PATTERN  10
-#define PER16_TILE     5
-#define PER16_COPY     9
+#define PER16_TILE     6
+#define PER16_COPY     5
+#define PLAIN256       13   /* a plain copy's pixels, per 256 */
+#define PER16_SMALL    9    /* small_sprite's pixels */
 #define PER16_SCALED   16
 #define PER16_DOT      18
 #define PER16_TLINE    48
@@ -449,8 +549,10 @@ struct pen
     uint16_t pat;
     uint32_t count;                 /* pixels drawn */
     uint32_t cost;                  /* units, besides the pixels */
-    uint16_t per16;                 /* units per 16 pixels */
+    uint16_t per256;                /* units per 256 pixels */
     int32_t lo, hi;
+    int32_t xlo, xhi;               /* the columns drawn, as area_touched */
+    int wide;                       /* columns unknown: a row_touched */
     const struct draw *d;
     const uint16_t *xl;
 };
@@ -477,19 +579,124 @@ static void begin(struct vm *vm, struct pen *p, uint32_t c, int patterned)
     p->alt = d->dpal[(c >> 8) & 0xff];
     p->count = 0;
     p->cost = COST_CALL;
-    p->per16 = p->pat ? PER16_PATTERN : PER16_FILL;
+    p->per256 = p->pat ? PER16_PATTERN * 16 : FILL256;
     p->lo = 0x7fffffff;
     p->hi = -1;
+    p->xlo = 0x7fffffff;
+    p->xhi = -1;
+    p->wide = 0;
     p->d = d;
     p->xl = xlat_of(d);
 }
 
+/* ---- the camera's turn and zoom ------------------------------------------ *
+ * A turned or zoomed camera moves each point drawn about its pivot before
+ * the drawing takes the camera's offset off as ever: these give a point
+ * back moved but still before that offset. Shapes, lines, points and
+ * outlines turn and grow whole, lines staying a pixel wide; sprites,
+ * images, text and particles go where their middle moves to, upright and
+ * their own size, but for rspr and rblit, which turn and grow too. */
+
+/* a times b, 64 bits from 32: one smull on the player, where -Os would
+ * otherwise share turn_fix's 64-bit multiplies with its far path, about
+ * 220 cycles a point on the rig against 45 */
+static inline __attribute__((always_inline)) int64_t mul32(int32_t a,
+                                                           int32_t b)
+{
+#ifdef ARCADE_ASM
+    uint32_t lo, hi;
+    __asm__("smull %0, %1, %2, %3" : "=&r"(lo), "=&r"(hi) : "r"(a), "r"(b));
+    return (int64_t)((uint64_t)hi << 32 | lo);
+#else
+    return (int64_t)a * b;
+#endif
+}
+
+/* x, y, 16.16, turned */
+static void turn_fix(const struct draw *d, int64_t *x, int64_t *y)
+{
+    int64_t ox = ((int64_t)d->cam_x << 16) + d->cam_px;
+    int64_t oy = ((int64_t)d->cam_y << 16) + d->cam_py;
+    int64_t sx = *x - ox, sy = *y - oy;
+    if (sx == (int32_t)sx && sy == (int32_t)sy) {
+        /* the same products as below, from 32-bit multiplies */
+        int32_t x32 = (int32_t)sx, y32 = (int32_t)sy;
+        *x = ox + ((mul32(x32, d->cam_cos) - mul32(y32, d->cam_sin)) >> 16);
+        *y = oy + ((mul32(x32, d->cam_sin) + mul32(y32, d->cam_cos)) >> 16);
+        return;
+    }
+    /* far beyond any target, kept where the multiply cannot overflow at
+     * the greatest zoom */
+    const int64_t far = (int64_t)1 << 40;
+    if (sx > far) sx = far;
+    if (sx < -far) sx = -far;
+    if (sy > far) sy = far;
+    if (sy < -far) sy = -far;
+    *x = ox + ((sx * d->cam_cos - sy * d->cam_sin) >> 16);
+    *y = oy + ((sx * d->cam_sin + sy * d->cam_cos) >> 16);
+}
+
+/* The pixel x, y turned: its middle, and the pixel that lands in */
+static void turn_px(const struct draw *d, int32_t *x, int32_t *y)
+{
+    if (!d->cam_moved)
+        return;
+    int64_t fx = ((int64_t)*x << 16) + 32768, fy = ((int64_t)*y << 16) + 32768;
+    turn_fix(d, &fx, &fy);
+    *x = (int32_t)clampc(fx >> 16);
+    *y = (int32_t)clampc(fy >> 16);
+}
+
+/* A w by h picture whose corner is x, y: its corner once its middle has
+ * turned */
+static void turn_box(const struct draw *d, int32_t *x, int32_t *y, int32_t w,
+                     int32_t h)
+{
+    if (!d->cam_moved)
+        return;
+    int64_t fx = ((int64_t)*x << 16) + ((int64_t)w << 15);
+    int64_t fy = ((int64_t)*y << 16) + ((int64_t)h << 15);
+    turn_fix(d, &fx, &fy);
+    *x = (int32_t)clampc((fx - ((int64_t)w << 15) + 32768) >> 16);
+    *y = (int32_t)clampc((fy - ((int64_t)h << 15) + 32768) >> 16);
+}
+
+/* rspr's and rblit's middle, 16.16, moved, and their angle and scale with
+ * it: their angle turns the other way from the camera's */
+static void turn_turned(const struct draw *d, int64_t *x, int64_t *y,
+                        int64_t *angle, int32_t *scale)
+{
+    if (!d->cam_moved)
+        return;
+    turn_fix(d, x, y);
+    *angle -= d->cam_turn;
+    int64_t k = ((int64_t)*scale * d->cam_zoom) >> 16;
+    *scale = (int32_t)(k < 0x400 ? 0x400 : k > (64 << 16) ? 64 << 16 : k);
+}
+
+/* Row y drawn on; its columns unknown, so a field's box takes the row
+ * whole */
 static void row_touched(struct pen *p, int32_t y)
 {
     if (y < p->lo)
         p->lo = y;
     if (y > p->hi)
         p->hi = y;
+    p->wide = 1;
+}
+
+/* Columns x0..x1 of row y drawn on; inlined, as every span calls it */
+static inline __attribute__((always_inline)) void
+area_touched(struct pen *p, int32_t y, int32_t x0, int32_t x1)
+{
+    if (y < p->lo)
+        p->lo = y;
+    if (y > p->hi)
+        p->hi = y;
+    if (x0 < p->xlo)
+        p->xlo = x0;
+    if (x1 > p->xhi)
+        p->xhi = x1;
 }
 
 static void finish(struct vm *vm, struct pen *p)
@@ -499,8 +706,13 @@ static void finish(struct vm *vm, struct pen *p)
             vm->d.dirty_lo = (int16_t)p->lo;
         if (p->hi > vm->d.dirty_hi)
             vm->d.dirty_hi = (int16_t)p->hi;
-    }
-    vm_charge(vm, p->cost + p->count * p->per16 / 16);
+    } else if (p->hi >= 0 && vm->d.target.tag == T_IMG)
+        /* an image a cells field steps: what was drawn, for cells.step's
+         * box -- whole rows where the columns are not known */
+        cells_drawn(vm, (uint32_t)vm->d.target.v, p->s.w, p->s.h,
+                    p->wide ? 0 : p->xlo, p->lo,
+                    p->wide ? p->s.w - 1 : p->xhi, p->hi);
+    vm_charge(vm, p->cost + p->count * p->per256 / 256);
 }
 
 /* Pixels x0..x1 of row y, in surface coordinates, clipped. */
@@ -528,7 +740,7 @@ static void span(struct pen *p, int64_t y, int64_t x0, int64_t x1)
         }
     }
     p->count += (uint32_t)(x1 - x0 + 1);
-    row_touched(p, (int32_t)y);
+    area_touched(p, (int32_t)y, (int32_t)x0, (int32_t)x1);
 }
 
 static void dot(struct pen *p, int64_t x, int64_t y)
@@ -681,7 +893,7 @@ static void span32(struct pen *p, int32_t y, int32_t l, int32_t r)
     memset(p->s.px + y * p->s.w + l, p->c, (size_t)(r - l + 1));
     p->count += (uint32_t)(r - l + 1);
     p->cost += COST_ROW;
-    row_touched(p, y);
+    area_touched(p, y, l, r);
 }
 
 /* The integer square root of v, found from w, the last row's */
@@ -717,6 +929,8 @@ static int circle_near(struct pen *p, int64_t a, int64_t b, int64_t r,
             wc = sqrt_from(rr - d * d, wc);
             span32(p, y, ca - wc, ca + wc);
         }
+        /* each row's width found, beyond span32's: measured on the rig */
+        p->cost += (uint32_t)(y1 - y0 + 1) * COST_ROW;
         return 1;
     }
     int up = y0 - 1 >= top;
@@ -762,6 +976,7 @@ static int circle(struct vm *vm, struct value *a, int argc, int outline,
     COLOUR(3, c, fn);
     if (r < 0)
         return 1;
+    turn_px(&vm->d, &x, &y);
     struct pen p;
     struct figure s = { circle_row, 0, 0, clampc(x), clampc(y),
                        r > FAR ? FAR : r, 0 };
@@ -800,6 +1015,19 @@ static int oval(struct vm *vm, struct value *a, int argc, int outline,
     if (!box(vm, a, argc, fn, b, 16384))
         return 0;
     COLOUR(4, c, fn);
+    if (vm->d.cam_moved) {
+        /* its middle moved, its axes upright and zoomed */
+        int64_t mx = (b[0] + b[2] + 1) << 15, my = (b[1] + b[3] + 1) << 15;
+        turn_fix(&vm->d, &mx, &my);
+        int64_t hw = ((b[2] - b[0] + 1) * vm->d.cam_zoom) >> 1;
+        int64_t hh = ((b[3] - b[1] + 1) * vm->d.cam_zoom) >> 1;
+        b[0] = clampc((mx - hw + 32768) >> 16);
+        b[1] = clampc((my - hh + 32768) >> 16);
+        b[2] = clampc((mx + hw + 32768) >> 16) - 1;
+        b[3] = clampc((my + hh + 32768) >> 16) - 1;
+        if (b[2] < b[0]) b[2] = b[0];
+        if (b[3] < b[1]) b[3] = b[1];
+    }
     struct pen p;
     struct figure s = { oval_row, b[1], b[3], b[0] + b[2], b[1] + b[3],
                        b[2] - b[0], b[3] - b[1] };
@@ -868,7 +1096,7 @@ static void plot_dot(struct pen *p, void *ctx, int64_t x, int64_t y, int64_t i)
     } else
         *px = p->c;
     p->count++;
-    row_touched(p, yi);
+    area_touched(p, yi, xi, xi);
 }
 
 /* plot_dot along a run, unpatterned. visible() put every pixel's major
@@ -1112,10 +1340,12 @@ NATIVE(line)
     WHOLE(2, 0, x1, "line");
     WHOLE(3, 0, y1, "line");
     COLOUR(4, c, "line");
+    turn_px(&vm->d, &x0, &y0);
+    turn_px(&vm->d, &x1, &y1);
     struct pen p;
     begin(vm, &p, c, 1);
     p.cost += 8;
-    p.per16 = PER16_DOT;
+    p.per256 = PER16_DOT * 16;
     walk_line(&p, x0, y0, x1, y1, plot_dot, p.pat ? NULL : run_dots, NULL);
     finish(vm, &p);
     return 1;
@@ -1147,7 +1377,7 @@ static void plot_map(struct pen *p, void *ctx, int64_t x, int64_t y, int64_t i)
         return;
     p->s.px[y * p->s.w + x] = p->d->dpal[c];
     p->count++;
-    row_touched(p, (int32_t)y);
+    area_touched(p, (int32_t)y, (int32_t)x, (int32_t)x);
 }
 
 /* plot_map along a run, with the map position in 32 bits */
@@ -1225,7 +1455,7 @@ NATIVE(tline)
         return 0;
     struct pen p;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;                    /* each pixel walked is charged */
+    p.per256 = 0;                    /* each pixel walked is charged */
     /* run_map is exact while the map position fits in 32 bits at every
      * pixel, which holds if it does at both ends of the line. */
     int64_t len = clampc(x1) - clampc(x0), ylen = clampc(y1) - clampc(y0);
@@ -1355,6 +1585,14 @@ static int triangle_near(struct pen *p, const int64_t v[6])
 /* A filled triangle, its corners v (x, y three times) before the camera */
 static void fill_triangle(struct pen *p, int64_t v[6])
 {
+    /* wholly left or right of the clip: no row is walked */
+    int64_t xmin = v[0], xmax = v[0];
+    for (int i = 2; i < 6; i += 2) {
+        if (v[i] < xmin) xmin = v[i];
+        if (v[i] > xmax) xmax = v[i];
+    }
+    if (xmax + p->ox < p->cx0 || xmin + p->ox >= p->cx1)
+        return;
     if (triangle_near(p, v))
         return;
     int64_t ymin = v[1], ymax = v[1];
@@ -1403,11 +1641,17 @@ static int triangle(struct vm *vm, struct value *a, int argc, int outline,
         v[i] = clampc(k);
     }
     COLOUR(6, c, fn);
+    for (int i = 0; i < 6 && vm->d.cam_moved; i += 2) {
+        int32_t x = (int32_t)v[i], y = (int32_t)v[i + 1];
+        turn_px(&vm->d, &x, &y);
+        v[i] = x;
+        v[i + 1] = y;
+    }
     struct pen p;
     begin(vm, &p, c, 1);
     if (outline) {
         run_fn run = p.pat ? NULL : run_dots;
-        p.per16 = PER16_DOT;
+        p.per256 = PER16_DOT * 16;
         walk_line(&p, v[0], v[1], v[2], v[3], plot_dot, run, NULL);
         walk_line(&p, v[2], v[3], v[4], v[5], plot_dot, run, NULL);
         walk_line(&p, v[4], v[5], v[0], v[1], plot_dot, run, NULL);
@@ -1421,6 +1665,946 @@ static int triangle(struct vm *vm, struct value *a, int argc, int outline,
 
 NATIVE(tri) { (void)out; return triangle(vm, a, argc, 1, "tri"); }
 NATIVE(trifill) { (void)out; return triangle(vm, a, argc, 0, "trifill"); }
+
+/* ---- polygons ------------------------------------------------------------ *
+ * polyfill(): outlines filled by the even-odd rule, a row at a time. Each
+ * outline's lines, and its curves cut into lines, become edges; a row's
+ * pixels are those whose middles lie between the 1st and 2nd edge it
+ * crosses, the 3rd and 4th, and so on, so an outline inside another is a
+ * hole. */
+
+#define POLY_POINTS 8192    /* the most points one call takes */
+#define POLY_PIECES 16      /* the most lines a curve is cut into */
+#define POLY_HELD   512     /* edges built in one pass, in held_edges */
+#define POLY_HELD_ROWS 256  /* and the rows that takes */
+#define POLY_RUN_LINES 16   /* the lines in each run polyboxes() boxes */
+
+/* units, measured on the ARM rig (polyprobe): the call's set-up beyond
+ * any call's, each point each time the outlines are walked, each edge
+ * kept (a division), each edge a row crosses, each step of putting a
+ * row's crossings in order, each curve, and each line a curve is cut
+ * into, beyond its edge's; each span is a row's set-up, COST_ROW, and its
+ * pixels the pen's */
+#define POLY_CALL  30
+#define POLY_POINT 8
+#define POLY_EDGE  8
+#define POLY_CROSS 3
+#define POLY_SHIFT 1
+#define POLY_CURVE 19
+#define POLY_PIECE 8
+#define POLY_TURN  2    /* each point walked, when the camera turns */
+#define POLY_RUN   22   /* each run of an outline polyboxes() boxed */
+#define POLY_ASIDE 2    /* each edge wholly left or right of the clip */
+
+/* A row's first edge in starts[], plus one, with this bit flipped where an
+ * edge wholly left of the clip starts or ends: such an edge is kept only
+ * as the rows where an odd number of them lie left, whose fill then starts
+ * at the clip's left. One wholly right is dropped: a row's edges always
+ * come in pairs, so an odd number left on it means its fill runs on past
+ * the clip's right. */
+#define POLY_LEFT  0x80000000u
+
+/* An edge: where it crosses the middle of its next row, and its step a
+ * row, both 16.16; the row after its last; and the next edge to start on
+ * its first row, plus one */
+struct pedge
+{
+    int64_t x, dx;
+    int32_t y1;
+    int32_t next;
+};
+
+/* The edges built in one pass, their places in a row's order, and the
+ * first edge on each row: polyfill's, and a turned rectangle's */
+static struct pedge held_edges[POLY_HELD];
+static struct pedge *held_act[POLY_HELD];
+static int32_t held_starts[POLY_HELD_ROWS];
+
+/* scratch() memory for edges, on an 8-byte boundary: the 6G's compiler
+ * moves an edge's 64-bit fields with ldrd and strd, whose result ARMv5
+ * leaves undefined off one, and scratch() gives 4 */
+static uint8_t *edge_scratch(struct vm *vm, uint32_t bytes)
+{
+    uint8_t *mem = scratch(vm, bytes + 7);
+    return mem ? mem + ((-(uintptr_t)mem) & 7) : NULL;
+}
+
+struct poly
+{
+    struct pedge *e;
+    int32_t *starts;            /* the first edge on each row, plus one */
+    uint32_t n, max;
+    int32_t y0, y1;             /* the clip's rows */
+    int32_t lo, hi;             /* the rows the edges cover */
+    int counting;               /* only count the edges, for the memory */
+    uint32_t curves, pieces;
+    int64_t xmin, xmax;         /* how far the edges reach, 16.16 */
+    int full;                   /* more edges than max */
+    int64_t xl, xr;             /* edges past these are aside, 16.16 */
+    uint32_t aside;             /* edges wholly left or right */
+    uint32_t measured;          /* edges cut to the clip's rows to test */
+    const int32_t *boxes;       /* polyboxes()' runs, or none */
+    uint32_t run;               /* the next of them */
+    uint32_t *tally;            /* the points walked and the runs looked at */
+};
+
+/* (n << 16) / d, d above 0, toward 0: the 64-bit divide, but a byte at a
+ * time in 32-bit ones while n and d allow -- on the player a 64-bit divide
+ * costs several of those */
+static int64_t slope(int64_t n, int64_t d)
+{
+    uint64_t u = n < 0 ? -(uint64_t)n : (uint64_t)n;
+    /* the 32-bit way only while its whole part fits in 16 bits */
+    if (u >= 0x80000000u || d >= (1 << 24) || (u >> 16) >= (uint64_t)d)
+        return (n << 16) / d;
+    uint32_t ud = (uint32_t)d, r = (uint32_t)u % ud;
+    uint32_t q = (uint32_t)u / ud << 16;
+    q |= (r << 8) / ud << 8;
+    r = (r << 8) % ud;
+    q |= (r << 8) / ud;
+    return n < 0 ? -(int64_t)q : (int64_t)q;
+}
+
+/* The line a to b, 16.16 on the surface, as an edge over the rows whose
+ * middles it spans; 0 when there are more edges than counted */
+static int poly_line(struct poly *g, int64_t ax, int64_t ay, int64_t bx,
+                     int64_t by)
+{
+    if (ay == by)
+        return 1;
+    if (ay > by) {
+        int64_t t = ax; ax = bx; bx = t;
+        t = ay; ay = by; by = t;
+    }
+    /* rows whose middle, y + 1/2, is at least ay and below by */
+    int64_t r0 = (ay - 32768 + 65535) >> 16;
+    int64_t r1 = (by - 32768 + 65535) >> 16;
+    int cut = r0 < g->y0 || r1 > g->y1;
+    if (r0 < g->y0)
+        r0 = g->y0;
+    if (r1 > g->y1)
+        r1 = g->y1;
+    if (r0 >= r1)
+        return 1;
+    if (ax < g->xmin) g->xmin = ax;
+    if (ax > g->xmax) g->xmax = ax;
+    if (bx < g->xmin) g->xmin = bx;
+    if (bx > g->xmax) g->xmax = bx;
+    /* a pixel clear of the clip either side, wherever its rows cross; an
+     * edge reaching past the clip's rows -- a tall wall the camera turns
+     * -- by where it crosses the first and last of them, as it can lie
+     * clear across those though not across its length */
+    int64_t lx = ax < bx ? ax : bx, hx = ax > bx ? ax : bx, dx = 0;
+    int sloped = 0;
+    if (cut && lx <= g->xr && hx >= g->xl) {
+        dx = slope(bx - ax, by - ay);
+        sloped = 1;
+        if (!g->counting)
+            g->measured++;
+        int64_t xa = ax + (((r0 << 16) + 32768 - ay) * dx >> 16);
+        int64_t xb = xa + (r1 - 1 - r0) * dx;
+        lx = xa < xb ? xa : xb;
+        hx = xa > xb ? xa : xb;
+    }
+    int left = hx < g->xl;
+    if (left || lx > g->xr) {
+        g->aside++;
+        if (g->counting)
+            return 1;
+        if (left) {
+            g->starts[r0 - g->y0] ^= (int32_t)POLY_LEFT;
+            if (r1 < g->y1)
+                g->starts[r1 - g->y0] ^= (int32_t)POLY_LEFT;
+            if (r0 < g->lo)
+                g->lo = (int32_t)r0;
+            if (r1 > g->hi)
+                g->hi = (int32_t)r1;
+        }
+        return 1;
+    }
+    if (g->counting) {
+        g->n++;
+        return 1;
+    }
+    if (g->n >= g->max) {
+        g->full = 1;
+        return 0;
+    }
+    struct pedge *e = &g->e[g->n];
+    e->dx = sloped ? dx : slope(bx - ax, by - ay);
+    e->x = ax + (((r0 << 16) + 32768 - ay) * e->dx >> 16);
+    e->y1 = (int32_t)r1;
+    if (r0 < g->lo)
+        g->lo = (int32_t)r0;
+    if (r1 > g->hi)
+        g->hi = (int32_t)r1;
+    int32_t *st = &g->starts[r0 - g->y0];
+    e->next = (int32_t)((uint32_t)*st & ~POLY_LEFT);
+    *st = (int32_t)(((uint32_t)*st & POLY_LEFT) | ++g->n);
+    return 1;
+}
+
+/* How many lines the curve from a by c to b is cut into: enough that
+ * none strays a quarter pixel from it */
+static int32_t poly_pieces(int64_t ax, int64_t ay, int64_t cx, int64_t cy,
+                           int64_t bx, int64_t by)
+{
+    int64_t dx = ax - 2 * cx + bx, dy = ay - 2 * cy + by;
+    uint64_t bend = (uint64_t)((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy)) >> 16;
+    int32_t k = 1 + (int32_t)isqrt64(bend / 2);
+    return k > POLY_PIECES ? POLY_PIECES : k;
+}
+
+/* The curve from a, drawn toward c, to b, as lines */
+static int poly_curve(struct poly *g, int64_t ax, int64_t ay, int64_t cx,
+                      int64_t cy, int64_t bx, int64_t by)
+{
+    int32_t k = poly_pieces(ax, ay, cx, cy, bx, by);
+    if (!g->counting) {
+        g->curves++;
+        g->pieces += (uint32_t)k;
+    }
+    /* a + 2t (c - a) + t^2 (a - 2c + b), t in sixteenths of 1/65536 */
+    int64_t ux = 2 * (cx - ax), uy = 2 * (cy - ay);
+    int64_t vx = ax - 2 * cx + bx, vy = ay - 2 * cy + by;
+    int64_t px = ax, py = ay, dt = 65536 / k;
+    for (int32_t i = 1; i <= k; i++) {
+        int64_t t = i * dt, tt = t * t >> 16, qx = bx, qy = by;
+        if (i < k) {
+            qx = ax + (ux * t >> 16) + (vx * tt >> 16);
+            qy = ay + (uy * t >> 16) + (vy * tt >> 16);
+        }
+        if (!poly_line(g, px, py, qx, qy))
+            return 0;
+        px = qx;
+        py = qy;
+    }
+    return 1;
+}
+
+/* Point i of the outline, 16.16 on the surface */
+static void poly_point(const struct pen *p, const struct column *xs,
+                       const struct column *ys, uint32_t i, int64_t *x,
+                       int64_t *y)
+{
+    *x = column_fix(xs, i);
+    *y = column_fix(ys, i);
+    if (p->d->cam_moved)
+        turn_fix(p->d, x, y);
+    *x += p->ox << 16;
+    *y += p->oy << 16;
+}
+
+/* Walking an outline: the point last on it, and the curve point waiting
+ * to bend the next stretch, if any */
+struct walk
+{
+    struct poly *g;
+    int64_t ox, oy, cx, cy;
+    int ctl;
+};
+
+/* The outline on to q: a curve point bends the line through it, and two
+ * curve points together have a point on the outline halfway between */
+static int walk_to(struct walk *w, int64_t qx, int64_t qy, int curve)
+{
+    if (curve) {
+        if (w->ctl) {
+            int64_t mx = (w->cx + qx) / 2, my = (w->cy + qy) / 2;
+            if (!poly_curve(w->g, w->ox, w->oy, w->cx, w->cy, mx, my))
+                return 0;
+            w->ox = mx;
+            w->oy = my;
+        }
+        w->cx = qx;
+        w->cy = qy;
+        w->ctl = 1;
+        return 1;
+    }
+    if (!(w->ctl ? poly_curve(w->g, w->ox, w->oy, w->cx, w->cy, qx, qy)
+                 : poly_line(w->g, w->ox, w->oy, qx, qy)))
+        return 0;
+    w->ox = qx;
+    w->oy = qy;
+    w->ctl = 0;
+    return 1;
+}
+
+/* One outline, points s to e - 1 and back to s, as a TrueType outline:
+ * lines from point to point, but a point with bend non-zero bends the
+ * line through it */
+/* A point's place against the clip's rows and right edge: 1 on or above
+ * the first row's middle, 2 below the last's, 4 right of it */
+static unsigned poly_code(const struct poly *g, int64_t x, int64_t y,
+                          int64_t top, int64_t bot)
+{
+    return (unsigned)(y <= top) | (unsigned)(y > bot) << 1 |
+           (unsigned)(x > g->xr) << 2;
+}
+
+/* Point i of a column in 16.16, as column_fix, an array's read in place */
+static inline __attribute__((always_inline)) int32_t plain_fix(
+    const struct column *c, uint32_t i)
+{
+    if (c->tag == T_ARR) {
+        struct value v = ((const struct value *)c->p)[i];
+        if (v.tag == T_FIX)
+            return v.v;
+        if (v.tag == T_INT)
+            return (int32_t)((uint32_t)v.v << 16);
+        return 0;
+    }
+    return column_fix(c, i);
+}
+
+/* Point i of the outline, as poly_point, with the turn done in place
+ * where it is near: the walk along a long outline is most of its cost */
+static inline __attribute__((always_inline)) void plain_point(
+    const struct pen *p, const struct column *xs, const struct column *ys,
+    uint32_t i, int64_t ox, int64_t oy, int64_t *x, int64_t *y)
+{
+    int64_t fx = plain_fix(xs, i), fy = plain_fix(ys, i);
+    const struct draw *d = p->d;
+    if (d->cam_moved) {
+        int64_t cx = ((int64_t)d->cam_x << 16) + d->cam_px;
+        int64_t cy = ((int64_t)d->cam_y << 16) + d->cam_py;
+        int64_t sx = fx - cx, sy = fy - cy;
+        if (sx == (int32_t)sx && sy == (int32_t)sy) {
+            int32_t x32 = (int32_t)sx, y32 = (int32_t)sy;
+            fx = cx + ((mul32(x32, d->cam_cos) - mul32(y32, d->cam_sin)) >> 16);
+            fy = cy + ((mul32(x32, d->cam_sin) + mul32(y32, d->cam_cos)) >> 16);
+        } else
+            turn_fix(d, &fx, &fy);
+    }
+    *x = fx + ox;
+    *y = fy + oy;
+}
+
+enum { RUN_WALK, RUN_OVER, RUN_LEFT, RUN_RIGHT };
+
+/* Where a run's box lies on the surface against the clip: wholly above or
+ * below its rows, wholly left or right of it, or across it and to be
+ * walked. The box's corners are turned as the points are, its reach then
+ * a pixel wider for their rounding; one too far out to turn as near is
+ * walked. lx and hx are how far it reaches. */
+static int run_side(const struct poly *g, const struct pen *p,
+                    const int32_t *box, int64_t top, int64_t bot,
+                    int64_t *lx, int64_t *hx)
+{
+    const struct draw *d = p->d;
+    int64_t x0 = INT64_MAX, y0 = INT64_MAX, x1 = INT64_MIN, y1 = INT64_MIN;
+    for (int k = 0; k < 4; k++) {
+        int64_t x = box[k & 1 ? 2 : 0], y = box[k & 2 ? 3 : 1];
+        if (d->cam_moved) {
+            int64_t cx = ((int64_t)d->cam_x << 16) + d->cam_px;
+            int64_t cy = ((int64_t)d->cam_y << 16) + d->cam_py;
+            int64_t sx = x - cx, sy = y - cy;
+            if (sx != (int32_t)sx || sy != (int32_t)sy)
+                return RUN_WALK;
+            int32_t x32 = (int32_t)sx, y32 = (int32_t)sy;
+            x = cx + ((mul32(x32, d->cam_cos) - mul32(y32, d->cam_sin)) >> 16);
+            y = cy + ((mul32(x32, d->cam_sin) + mul32(y32, d->cam_cos)) >> 16);
+        }
+        x += p->ox << 16;
+        y += p->oy << 16;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+    }
+    x0 -= 65536;
+    y0 -= 65536;
+    x1 += 65536;
+    y1 += 65536;
+    *lx = x0;
+    *hx = x1;
+    if (y1 <= top || y0 > bot)
+        return RUN_OVER;
+    if (x0 > g->xr)
+        return RUN_RIGHT;
+    if (x1 < g->xl)
+        return RUN_LEFT;
+    return RUN_WALK;
+}
+
+/* An outline without curve points, s to e - 1 and back to s, as
+ * poly_line would take each line: one with both ends above the clip's
+ * rows, or both below, or level, makes no edge, and one with both right
+ * of it only its count, so neither is set up as an edge -- most of a
+ * long level outline when a part of it is in view.
+ * With polyboxes()' runs, a run wholly above, below or right of the clip
+ * is passed over in the same way without its points; one wholly left
+ * sets the rows between its ends as left of the clip, as the line from
+ * its first point to its last does, which is what its lines come to. */
+static int poly_plain(struct poly *g, const struct pen *p,
+                      const struct column *xs, const struct column *ys,
+                      uint32_t s, uint32_t e)
+{
+    int64_t top = ((int64_t)g->y0 << 16) + 32768;
+    int64_t bot = ((int64_t)(g->y1 - 1) << 16) + 32768;
+    int64_t ax, ay, bx, by, sx, sy;
+    int64_t ox = (int64_t)p->ox << 16, oy = (int64_t)p->oy << 16;
+    plain_point(p, xs, ys, s, ox, oy, &ax, &ay);
+    g->tally[0]++;
+    sx = ax;
+    sy = ay;
+    unsigned ca = poly_code(g, ax, ay, top, bot);
+    for (uint32_t i = s + 1, next = s + 1; i <= e; i++) {
+        if (g->boxes && i == next) {
+            /* a run begins: the lines from point i - 1 to point b */
+            uint32_t b = i - 1 + POLY_RUN_LINES < e ? i - 1 + POLY_RUN_LINES
+                                                    : e;
+            int64_t lx, hx;
+            int side = run_side(g, p, g->boxes + 3 + 4 * g->run++, top, bot,
+                                &lx, &hx);
+            g->tally[1]++;
+            next = b + 1;
+            if (side != RUN_WALK) {
+                if (b < e)
+                    plain_point(p, xs, ys, b, ox, oy, &bx, &by);
+                else {
+                    bx = sx;
+                    by = sy;
+                }
+                g->tally[0]++;
+                if (side == RUN_LEFT) {
+                    if (ay != by && !poly_line(g, ax, ay, bx, by))
+                        return 0;
+                } else if (side == RUN_RIGHT) {
+                    if (lx < g->xmin) g->xmin = lx;
+                    if (hx > g->xmax) g->xmax = hx;
+                    g->aside++;
+                }
+                ax = bx;
+                ay = by;
+                ca = poly_code(g, ax, ay, top, bot);
+                i = b;
+                continue;
+            }
+        }
+        if (i < e) {
+            plain_point(p, xs, ys, i, ox, oy, &bx, &by);
+            g->tally[0]++;
+        } else {
+            bx = sx;
+            by = sy;
+        }
+        unsigned cb = poly_code(g, bx, by, top, bot), both = ca & cb;
+        if (ay != by && !(both & 3)) {
+            if (both & 4) {
+                /* as poly_line counts it: only where its rows meet the
+                 * clip's, and wherever it reaches */
+                int64_t ly = ay < by ? ay : by, hy = ay > by ? ay : by;
+                int64_t r0 = (ly - 32768 + 65535) >> 16;
+                int64_t r1 = (hy - 32768 + 65535) >> 16;
+                if (r0 < g->y0)
+                    r0 = g->y0;
+                if (r1 > g->y1)
+                    r1 = g->y1;
+                if (r0 < r1) {
+                    if (ax < g->xmin) g->xmin = ax;
+                    if (ax > g->xmax) g->xmax = ax;
+                    if (bx < g->xmin) g->xmin = bx;
+                    if (bx > g->xmax) g->xmax = bx;
+                    g->aside++;
+                }
+            } else if (!poly_line(g, ax, ay, bx, by))
+                return 0;
+        }
+        ax = bx;
+        ay = by;
+        ca = cb;
+    }
+    return 1;
+}
+
+static int poly_outline(struct poly *g, const struct pen *p,
+                        const struct column *xs, const struct column *ys,
+                        const struct column *bend, uint32_t s, uint32_t e)
+{
+    if (e - s < 2)
+        return 1;
+    if (bend->tag == T_INT && bend->k == 0)
+        return poly_plain(g, p, xs, ys, s, e);
+    uint32_t n = e - s, j = 0;
+    while (j < n && column_at(bend, s + j, 0))
+        j++;
+    struct walk w = { g, 0, 0, 0, 0, 0 };
+    int64_t qx, qy;
+    if (j < n) {
+        /* from the first point on the outline, round to it again */
+        poly_point(p, xs, ys, s + j, &w.ox, &w.oy);
+        int64_t sx = w.ox, sy = w.oy;
+        for (uint32_t k = 1; k < n; k++) {
+            uint32_t i = s + (j + k) % n;
+            poly_point(p, xs, ys, i, &qx, &qy);
+            if (!walk_to(&w, qx, qy, column_at(bend, i, 0) != 0))
+                return 0;
+        }
+        return walk_to(&w, sx, sy, 0);
+    }
+    /* every point a curve point: from halfway between the first two */
+    int64_t ax, ay;
+    poly_point(p, xs, ys, s, &ax, &ay);
+    poly_point(p, xs, ys, s + 1, &w.cx, &w.cy);
+    w.ox = (ax + w.cx) / 2;
+    w.oy = (ay + w.cy) / 2;
+    w.ctl = 1;
+    int64_t sx = w.ox, sy = w.oy;
+    for (uint32_t k = 2; k <= n; k++) {
+        poly_point(p, xs, ys, s + k % n, &qx, &qy);
+        if (!walk_to(&w, qx, qy, 1))
+            return 0;
+    }
+    return walk_to(&w, sx, sy, 0);
+}
+
+/* Each outline in turn: ends[k] is the point after outline k's last.
+ * 0 with the error set for ends out of order; stops at g full. */
+static int poly_edges(struct vm *vm, struct poly *g, const struct pen *p,
+                      const struct column *xs, const struct column *ys,
+                      const struct column *ends, uint32_t nends,
+                      const struct column *bend, uint32_t n)
+{
+    uint32_t s = 0;
+    g->run = 0;
+    for (uint32_t k = 0; k <= nends && s < n; k++) {
+        uint32_t e = n;
+        if (k < nends) {
+            int32_t v = column_at(ends, k, 0);
+            if (v <= (int32_t)s || (uint32_t)v > n)
+                return vm_fail(vm, "polyfill()'s ends must rise, each past "
+                               "the last and none past n", "", "");
+            e = (uint32_t)v;
+        }
+        if (!poly_outline(g, p, xs, ys, bend, s, e))
+            return 1;               /* g is full */
+        s = e;
+    }
+    return 1;
+}
+
+/* The rows the edges in g cover, filled by the even-odd rule; the units
+ * the walking and the spans' set-up cost, besides their pixels */
+static uint32_t poly_rows(struct pen *p, struct poly *g, struct pedge **act)
+{
+    /* the edges crossing the row, kept in order of where they cross: a
+     * row's order is nearly the last's, so putting it right is cheap */
+    uint32_t nact = 0, crossings = 0, shifts = 0, spans = 0;
+    struct pedge *e0 = g->e;
+    /* whether an odd number of edges lie left of the clip on the row */
+    uint32_t left = 0;
+    for (int32_t y = p->cy0; y < g->lo; y++)
+        left ^= (uint32_t)g->starts[y - p->cy0];
+    for (int32_t y = g->lo; y < g->hi; y++) {
+        left ^= (uint32_t)g->starts[y - p->cy0];
+        /* the last row's edges stepped on to this one, less those ended,
+         * then those starting on it */
+        uint32_t m = 0;
+        for (uint32_t k = 0; k < nact; k++) {
+            struct pedge *e = act[k];
+            if (y < e->y1) {
+                e->x += e->dx;
+                act[m++] = e;
+            }
+        }
+        for (int32_t i = (int32_t)((uint32_t)g->starts[y - p->cy0] &
+                                   ~POLY_LEFT); i; i = e0[i - 1].next)
+            act[m++] = &e0[i - 1];
+        nact = m;
+        for (uint32_t k = 1; k < m; k++) {
+            struct pedge *e = act[k];
+            int64_t x = e->x;
+            uint32_t at = k;
+            while (at && act[at - 1]->x > x) {
+                act[at] = act[at - 1];
+                at--;
+                shifts++;
+            }
+            act[at] = e;
+        }
+        crossings += m;
+        /* the pixels whose middles lie from one crossing to the next,
+         * from the clip's left when one lies left, and on to its right
+         * when one is left over */
+        uint32_t k = 0;
+        int64_t l = p->cx0;
+        if (left & POLY_LEFT) {
+            int64_t r = m ? ((act[0]->x + 32767) >> 16) - 1 : p->cx1 - 1;
+            if (l <= r) {
+                span(p, y, l, r);
+                spans++;
+            }
+            k = 1;
+        }
+        for (; k < m; k += 2) {
+            l = (act[k]->x + 32767) >> 16;
+            int64_t r = k + 1 < m ? ((act[k + 1]->x + 32767) >> 16) - 1
+                                  : p->cx1 - 1;
+            if (l <= r) {
+                span(p, y, l, r);
+                spans++;
+            }
+        }
+    }
+    return crossings * POLY_CROSS + shifts * POLY_SHIFT + spans * COST_ROW +
+           g->aside * POLY_ASIDE;
+}
+
+/* A quadrilateral, its corners 16.16 before the camera's offset, filled
+ * as polyfill() fills: a rectangle the camera turns */
+static int quad_fill(struct vm *vm, uint32_t c, const int64_t qx[4],
+                     const int64_t qy[4])
+{
+    struct pen p;
+    begin(vm, &p, c, 1);
+    uint32_t rows = (uint32_t)(p.cy1 > p.cy0 ? p.cy1 - p.cy0 : 0);
+    /* the four edges held; the rows' starts too, but for an image taller
+     * than those take */
+    int32_t *starts = held_starts;
+    if (rows > POLY_HELD_ROWS) {
+        starts = scratch(vm, rows * 4);
+        if (!starts)
+            return 0;
+        begin(vm, &p, c, 1);
+    } else
+        memset(held_starts, 0, rows * 4);
+    struct poly g = { held_edges, starts, 0, 4, p.cy0, p.cy1, p.cy1, p.cy0,
+                      0, 0, 0, 0, 0, 0, ((int64_t)p.cx0 - 1) << 16,
+                      ((int64_t)p.cx1 + 1) << 16, 0, 0, NULL, 0, NULL };
+    for (int k = 0; k < 4; k++)
+        poly_line(&g, qx[k] + (p.ox << 16), qy[k] + (p.oy << 16),
+                  qx[(k + 1) & 3] + (p.ox << 16),
+                  qy[(k + 1) & 3] + (p.oy << 16));
+    p.cost += COST_RECT + 4 * POLY_EDGE + poly_rows(&p, &g, held_act);
+    finish(vm, &p);
+    return 1;
+}
+
+/* The runs polyboxes() cuts the outlines into: POLY_RUN_LINES lines each,
+ * from each outline's start, the last of an outline as many as are left;
+ * an outline of fewer than two points has none. fold, where each outline
+ * ends, folded into a number, tells boxes for other ends. 0 with the error
+ * set for ends out of order. */
+static int poly_runs(struct vm *vm, const char *fn,
+                     const struct column *ends, uint32_t nends, uint32_t n,
+                     uint32_t *runs, uint32_t *fold)
+{
+    uint32_t s = 0;
+    *runs = 0;
+    *fold = 0;
+    for (uint32_t k = 0; k <= nends && s < n; k++) {
+        uint32_t e = n;
+        if (k < nends) {
+            int32_t v = column_at(ends, k, 0);
+            if (v <= (int32_t)s || (uint32_t)v > n)
+                return vm_fail(vm, fn, "()'s ends must rise, each past the "
+                               "last and none past n", "");
+            e = (uint32_t)v;
+        }
+        if (e - s >= 2)
+            *runs += (e - s + POLY_RUN_LINES - 1) / POLY_RUN_LINES;
+        *fold = *fold * 31 + e;
+        s = e;
+    }
+    return 1;
+}
+
+/* polyboxes(xs, ys, n, [ends]): polyfill()'s outlines in runs, each with
+ * the box round its points, in an Int32Array: n, the runs, the ends'
+ * fold, then each run's x0, y0, x1, y1 in 16.16 */
+NATIVE(polyboxes)
+{
+    struct column xs, ys, ends;
+    ends.tag = T_INT;
+    ends.k = 0;
+    if (!column_of(vm, a[0], &xs) || !column_of(vm, a[1], &ys) ||
+        xs.tag == T_INT || ys.tag == T_INT || !is_num(a[2]))
+        return vm_fail(vm, "polyboxes() needs arrays of x and y, then how "
+                       "many points", "", "");
+    int32_t n = floor_int(a[2]);
+    if (n < 0)
+        n = 0;
+    if (n > POLY_POINTS)
+        return vm_fail(vm, "polyboxes() takes at most 8192 points", "", "");
+    if ((uint32_t)n > xs.len || (uint32_t)n > ys.len)
+        return vm_fail(vm, "polyboxes() has fewer x or y than points", "",
+                       "");
+    uint32_t nends = 0, runs, fold;
+    if (argc > 3 && a[3].tag != T_NULL) {
+        if (!column_of(vm, a[3], &ends) || ends.tag == T_INT)
+            return vm_fail(vm, "polyboxes()'s ends is an array", "", "");
+        nends = ends.len;
+    }
+    if (!poly_runs(vm, "polyboxes", &ends, nends, (uint32_t)n, &runs, &fold))
+        return 0;
+    uint32_t off = gc_alloc(vm, T_I32,
+                            (uint32_t)(sizeof(struct i32) -
+                                       sizeof(struct hdr)) + (3 + 4 * runs) * 4);
+    if (!off)
+        return 0;
+    struct i32 *box = (struct i32 *)MEM(vm, off);
+    box->len = 3 + 4 * runs;
+    box->d[0] = n;
+    box->d[1] = (int32_t)runs;
+    box->d[2] = (int32_t)fold;
+    /* the allocation may have collected: the arrays found again */
+    column_of(vm, a[0], &xs);
+    column_of(vm, a[1], &ys);
+    if (nends)
+        column_of(vm, a[3], &ends);
+    int32_t *r = box->d + 3;
+    uint32_t s = 0;
+    for (uint32_t k = 0; k <= nends && s < (uint32_t)n; k++) {
+        uint32_t e = k < nends ? (uint32_t)column_at(&ends, k, 0) : (uint32_t)n;
+        if (e - s >= 2)
+            for (uint32_t i = s; i < e; i += POLY_RUN_LINES, r += 4) {
+                /* points i to the run's last, the outline's first after
+                 * its last */
+                uint32_t b = i + POLY_RUN_LINES < e ? i + POLY_RUN_LINES : e;
+                r[0] = r[1] = INT32_MAX;
+                r[2] = r[3] = INT32_MIN;
+                for (uint32_t j = i; j <= b; j++) {
+                    uint32_t q = j < e ? j : s;
+                    int32_t x = column_fix(&xs, q), y = column_fix(&ys, q);
+                    if (x < r[0]) r[0] = x;
+                    if (y < r[1]) r[1] = y;
+                    if (x > r[2]) r[2] = x;
+                    if (y > r[3]) r[3] = y;
+                }
+            }
+        s = e;
+    }
+    *out = mk(T_I32, (int32_t)off);
+    vm_charge(vm, POLY_CALL + (uint32_t)n * POLY_POINT / 2 + runs);
+    return 1;
+}
+
+/* polyfill(xs, ys, n, [c], [ends], [bend], [boxes]): the n points as
+ * outlines, filled by the even-odd rule. ends, when given, is where each
+ * outline ends (the index after its last point); bend, where non-zero,
+ * makes a point bend the line through it rather than be on it; boxes,
+ * from polyboxes() for these outlines, lets the runs out of view be
+ * passed over. */
+NATIVE(polyfill)
+{
+    (void)out;
+    struct column xs, ys, ends, bend;
+    if (!column_of(vm, a[0], &xs) || !column_of(vm, a[1], &ys) ||
+        xs.tag == T_INT || ys.tag == T_INT || !is_num(a[2]))
+        return vm_fail(vm, "polyfill() needs arrays of x and y, then how "
+                       "many points", "", "");
+    int32_t n = floor_int(a[2]);
+    if (n < 0)
+        n = 0;
+    if (n > POLY_POINTS)
+        return vm_fail(vm, "polyfill() takes at most 8192 points", "", "");
+    if ((uint32_t)n > xs.len || (uint32_t)n > ys.len)
+        return vm_fail(vm, "polyfill() has fewer x or y than points", "", "");
+    COLOUR(3, c, "polyfill");
+    uint32_t nends = 0;
+    ends.tag = bend.tag = T_INT;
+    ends.k = bend.k = 0;
+    ends.len = bend.len = 0xffffffffu;
+    ends.p = bend.p = NULL;
+    if (argc > 4 && a[4].tag != T_NULL) {
+        if (!column_of(vm, a[4], &ends) || ends.tag == T_INT)
+            return vm_fail(vm, "polyfill()'s ends is an array", "", "");
+        nends = ends.len;
+    }
+    if (argc > 5 && a[5].tag != T_NULL &&
+        (!column_of(vm, a[5], &bend) || bend.tag == T_INT ||
+         bend.len < (uint32_t)n))
+        return vm_fail(vm, "polyfill()'s bend is an array, one for each "
+                       "point", "", "");
+    const int32_t *boxes = NULL;
+    if (argc > 6 && a[6].tag != T_NULL) {
+        uint32_t runs, fold;
+        if (a[6].tag != T_I32)
+            return vm_fail(vm, "polyfill()'s boxes are an Int32Array from "
+                           "polyboxes()", "", "");
+        if (argc > 5 && a[5].tag != T_NULL)
+            return vm_fail(vm, "polyfill()'s boxes are for outlines without "
+                           "bend", "", "");
+        if (!poly_runs(vm, "polyfill", &ends, nends, (uint32_t)n, &runs,
+                       &fold))
+            return 0;
+        const struct i32 *b = I32(vm, a[6]);
+        if (b->len != 3 + 4 * runs || b->d[0] != n ||
+            b->d[1] != (int32_t)runs || b->d[2] != (int32_t)fold)
+            return vm_fail(vm, "polyfill()'s boxes are from polyboxes() for "
+                           "other points or ends", "", "");
+        boxes = b->d;
+    }
+    struct pen p;
+    begin(vm, &p, c, 1);
+    if (n < 3 || p.cy0 >= p.cy1 || p.cx0 >= p.cx1) {
+        finish(vm, &p);
+        return 1;
+    }
+    /* Built in one pass into the held edges when they fit, which is
+     * nearly always; otherwise counted, then built again into scratch */
+    uint32_t rows = (uint32_t)(p.cy1 - p.cy0), walks = 1;
+    int64_t xl = ((int64_t)p.cx0 - 1) << 16, xr = ((int64_t)p.cx1 + 1) << 16;
+    struct poly g = { held_edges, held_starts, 0, POLY_HELD, p.cy0, p.cy1,
+                      p.cy1, p.cy0, 0, 0, 0, (int64_t)1 << 62,
+                      -((int64_t)1 << 62), 0, xl, xr, 0, 0, NULL, 0, NULL };
+    struct pedge **act = held_act;
+    uint32_t tally[2] = { 0, 0 };
+    g.boxes = boxes;
+    g.tally = tally;
+    if (rows <= POLY_HELD_ROWS) {
+        memset(held_starts, 0, rows * 4);
+        if (!poly_edges(vm, &g, &p, &xs, &ys, &ends, nends, &bend,
+                        (uint32_t)n))
+            return 0;
+    }
+    if (rows > POLY_HELD_ROWS || g.full) {
+        walks += rows <= POLY_HELD_ROWS;
+        struct poly count = { NULL, NULL, 0, 0, p.cy0, p.cy1, p.cy1, p.cy0,
+                              1, 0, 0, (int64_t)1 << 62, -((int64_t)1 << 62),
+                              0, xl, xr, 0, 0, NULL, 0, NULL };
+        g = count;
+        g.boxes = boxes;
+        g.tally = tally;
+        if (!poly_edges(vm, &g, &p, &xs, &ys, &ends, nends, &bend,
+                        (uint32_t)n))
+            return 0;
+        uint32_t max = g.n;
+        if ((g.n || g.aside) && g.xmax >= ((int64_t)p.cx0 << 16) &&
+            g.xmin < ((int64_t)p.cx1 << 16)) {
+            uint32_t at_act = max * sizeof(struct pedge);
+            uint32_t at_starts = at_act + max * sizeof(struct pedge *);
+            uint8_t *mem = edge_scratch(vm, at_starts + rows * 4);
+            if (!mem)
+                return 0;
+            /* scratch may have collected: the arrays and surface found
+             * again */
+            column_of(vm, a[0], &xs);
+            column_of(vm, a[1], &ys);
+            if (nends)
+                column_of(vm, a[4], &ends);
+            if (argc > 5 && a[5].tag != T_NULL)
+                column_of(vm, a[5], &bend);
+            if (boxes)
+                boxes = I32(vm, a[6])->d;
+            g.boxes = boxes;
+            begin(vm, &p, c, 1);
+            g.e = (struct pedge *)(void *)mem;
+            g.starts = (int32_t *)(void *)(mem + at_starts);
+            g.n = 0;
+            g.aside = 0;
+            g.measured = 0;
+            g.max = max;
+            g.counting = 0;
+            act = (struct pedge **)(void *)(mem + at_act);
+            walks++;
+            if (!poly_edges(vm, &g, &p, &xs, &ys, &ends, nends, &bend,
+                            (uint32_t)n))
+                return 0;
+            if (g.full)
+                return vm_fail(vm, "polyfill() has more edges than it "
+                               "counted", "", "");
+        }
+    }
+    /* with boxes, the points the walk took; without, every point each
+     * time the outlines were walked */
+    uint32_t walked = boxes ? tally[0] : (uint32_t)n * walks;
+    p.cost += POLY_CALL + walked * POLY_POINT + tally[1] * POLY_RUN +
+              (g.counting ? 0 : g.n * POLY_EDGE + g.curves * POLY_CURVE +
+                                g.pieces * POLY_PIECE + g.measured * POLY_EDGE);
+    if (vm->d.cam_moved)
+        p.cost += walked * POLY_TURN;
+    /* wholly left or right of the clip, or above or below it: no row is
+     * walked */
+    if (!g.counting && (g.n || g.aside) &&
+        g.xmax >= ((int64_t)p.cx0 << 16) &&
+        g.xmin < ((int64_t)p.cx1 << 16))
+        p.cost += poly_rows(&p, &g, act);
+    finish(vm, &p);
+    return 1;
+}
+
+/* polyline(xs, ys, n, [c], [ends], [closed]): a line from each point to
+ * the next. ends, when given, is where each run of points ends (the
+ * index after its last), as polyfill takes outlines; closed joins each
+ * run's last point back to its first. c is a colour, or an array of one
+ * for each line -- line i's from point i. */
+NATIVE(polyline)
+{
+    (void)out;
+    struct column xs, ys, ends, cols;
+    if (!column_of(vm, a[0], &xs) || !column_of(vm, a[1], &ys) ||
+        xs.tag == T_INT || ys.tag == T_INT || !is_num(a[2]))
+        return vm_fail(vm, "polyline() needs arrays of x and y, then how "
+                       "many points", "", "");
+    int32_t n = floor_int(a[2]);
+    if (n < 0)
+        n = 0;
+    if (n > POLY_POINTS)
+        return vm_fail(vm, "polyline() takes at most 8192 points", "", "");
+    if ((uint32_t)n > xs.len || (uint32_t)n > ys.len)
+        return vm_fail(vm, "polyline() has fewer x or y than points", "", "");
+    uint32_t c = vm->d.pen;
+    cols.tag = T_NULL;
+    if (argc > 3 && (a[3].tag == T_ARR || a[3].tag == T_I32 ||
+                     a[3].tag == T_U8)) {
+        column_of(vm, a[3], &cols);
+        if (cols.len < (uint32_t)n)
+            return vm_fail(vm, "polyline()'s colours are one for each "
+                           "point", "", "");
+    } else if (!colour(vm, a, argc, 3, "polyline", &c))
+        return 0;
+    uint32_t nends = 0;
+    if (argc > 4 && a[4].tag != T_NULL) {
+        if (!column_of(vm, a[4], &ends) || ends.tag == T_INT)
+            return vm_fail(vm, "polyline()'s ends is an array", "", "");
+        nends = ends.len;
+    }
+    int closed = argc > 5 && vm_truthy(vm, a[5]);
+    const struct draw *d = &vm->d;
+    struct pen p;
+    begin(vm, &p, c, 1);
+    p.per256 = PER16_DOT * 16;
+    uint32_t s = 0;
+    for (uint32_t k = 0; k <= nends && s < (uint32_t)n; k++) {
+        uint32_t e = (uint32_t)n;
+        if (k < nends) {
+            int32_t v = column_at(&ends, k, 0);
+            if (v <= (int32_t)s || v > n)
+                return vm_fail(vm, "polyline()'s ends must rise, each past "
+                               "the last and none past n", "", "");
+            e = (uint32_t)v;
+        }
+        /* each point turned once, the line's end the next one's start */
+        int32_t fx0 = column_at(&xs, s, 0), fy0 = column_at(&ys, s, 0);
+        turn_px(d, &fx0, &fy0);
+        int32_t x0 = fx0, y0 = fy0;
+        for (uint32_t i = s; i < e; i++) {
+            int32_t x1 = fx0, y1 = fy0;
+            if (i + 1 < e) {
+                x1 = column_at(&xs, i + 1, 0);
+                y1 = column_at(&ys, i + 1, 0);
+                turn_px(d, &x1, &y1);
+            } else if (!closed || e - s < 3)
+                break;
+            if (cols.tag != T_NULL) {
+                uint32_t ci = (uint32_t)column_at(&cols, i, 0);
+                p.c = d->dpal[ci & 0xff];
+                p.alt_on = p.pat && ((ci >> 8) & 0xff);
+                p.alt = d->dpal[(ci >> 8) & 0xff];
+            }
+            p.cost += 18;           /* a line's setup, as core_draw_lines */
+            walk_line(&p, x0, y0, x1, y1, plot_dot,
+                      p.pat ? NULL : run_dots, NULL);
+            x0 = x1;
+            y0 = y1;
+        }
+        s = e;
+    }
+    finish(vm, &p);
+    return 1;
+}
 
 /* Rows from..to (inside the clip) of an unpatterned rectangle x0..x1:
  * filled, each row whole; hollow, its two edge columns. */
@@ -1457,6 +2641,39 @@ static void rows(struct pen *p, int32_t from, int32_t to, int64_t x0,
     row_touched(p, to);
 }
 
+/* A rectangle the camera turns: filled, the pixels' area x0..x1 + 1 as a
+ * quadrilateral; outlined, four lines through its corner pixels */
+static int turned_rect(struct vm *vm, const int64_t b[4], uint32_t c,
+                       int outline)
+{
+    const struct draw *d = &vm->d;
+    if (!outline) {
+        int64_t qx[4] = { b[0], b[2] + 1, b[2] + 1, b[0] };
+        int64_t qy[4] = { b[1], b[1], b[3] + 1, b[3] + 1 };
+        for (int k = 0; k < 4; k++) {
+            qx[k] <<= 16;
+            qy[k] <<= 16;
+            turn_fix(d, &qx[k], &qy[k]);
+        }
+        return quad_fill(vm, c, qx, qy);
+    }
+    int32_t x[4] = { (int32_t)b[0], (int32_t)b[2], (int32_t)b[2],
+                     (int32_t)b[0] };
+    int32_t y[4] = { (int32_t)b[1], (int32_t)b[1], (int32_t)b[3],
+                     (int32_t)b[3] };
+    for (int k = 0; k < 4; k++)
+        turn_px(d, &x[k], &y[k]);
+    struct pen p;
+    begin(vm, &p, c, 1);
+    p.cost += COST_RECT;
+    p.per256 = PER16_DOT * 16;
+    for (int k = 0; k < 4; k++)
+        walk_line(&p, x[k], y[k], x[(k + 1) & 3], y[(k + 1) & 3], plot_dot,
+                  p.pat ? NULL : run_dots, NULL);
+    finish(vm, &p);
+    return 1;
+}
+
 static int rectangle(struct vm *vm, struct value *a, int argc, int outline,
                      const char *fn)
 {
@@ -1464,8 +2681,11 @@ static int rectangle(struct vm *vm, struct value *a, int argc, int outline,
     if (!box(vm, a, argc, fn, b, FAR))
         return 0;
     COLOUR(4, c, fn);
+    if (vm->d.cam_moved)
+        return turned_rect(vm, b, c, outline);
     struct pen p;
     begin(vm, &p, c, 1);
+    p.cost += COST_RECT;
     int64_t x0 = b[0] + p.ox, x1 = b[2] + p.ox;
     int64_t y0 = b[1] + p.oy, y1 = b[3] + p.oy;
     /* An outline two pixels thick or less is all edge. */
@@ -1507,6 +2727,7 @@ NATIVE(pset)
     WHOLE(0, 0, x, "pset");
     WHOLE(1, 0, y, "pset");
     COLOUR(2, c, "pset");
+    turn_px(&vm->d, &x, &y);
     /* The screen without a fill pattern, the usual case, without a pen */
     struct draw *d = &vm->d;
     if (d->target.tag != T_IMG && !d->fill) {
@@ -1533,6 +2754,7 @@ NATIVE(pget)
     struct surf s;
     WHOLE(0, 0, x, "pget");
     WHOLE(1, 0, y, "pget");
+    turn_px(&vm->d, &x, &y);
     surf_of(vm, vm->d.target, &s, "pget");
     int64_t px = (int64_t)x - vm->d.cam_x, py = (int64_t)y - vm->d.cam_y;
     *out = mk(T_INT, px < 0 || py < 0 || px >= s.w || py >= s.h ? 0
@@ -1554,7 +2776,8 @@ NATIVE(cls)
         vm->d.dirty_lo = 0;
         vm->d.dirty_hi = (int16_t)(s.h - 1);
     }
-    vm_charge(vm, COST_CALL + (uint32_t)(s.w * s.h) / BYTES_PER_UNIT);
+    /* measured on the rig (cal): about 195 units a screen, a memset */
+    vm_charge(vm, COST_CALL + (uint32_t)(s.w * s.h) / CLS_PIXELS);
     return 1;
 }
 
@@ -1574,41 +2797,66 @@ static int scale_of(struct vm *vm)
     return vm->d.font == 1 ? 2 : vm->d.font_big + 1;
 }
 
-/* A glyph wholly inside the clip, unpatterned, k pixels to a dot: the
- * pixels span() would draw, without a clipped call for each. */
-static void glyph(struct pen *p, uint16_t g, int32_t x, int32_t y, int k)
+/* Each small glyph's dots, and its first and last rows with any, worked
+ * out once rather than at every glyph drawn */
+static uint8_t glyph_dots[95], glyph_rows[95];  /* top << 4 | bottom */
+static int glyph_known;
+
+static void glyph_table(void)
 {
+    for (int i = 0; i < 95; i++) {
+        uint16_t g = font_small[i];
+        int top = -1, bot = 0, dots = 0;
+        for (int r = 0; r < 5; r++) {
+            uint32_t bits = (g >> (12 - r * 3)) & 7;
+            if (!bits)
+                continue;
+            dots += (int)((bits & 1) + ((bits >> 1) & 1) + (bits >> 2));
+            if (top < 0)
+                top = r;
+            bot = r;
+        }
+        glyph_dots[i] = (uint8_t)dots;
+        glyph_rows[i] = (uint8_t)(top < 0 ? 0xff : top << 4 | bot);
+    }
+    glyph_known = 1;
+}
+
+/* Small glyph i wholly inside the clip, unpatterned, k pixels to a dot:
+ * the pixels span() would draw, without a clipped call for each. */
+static void glyph(struct pen *p, uint32_t i, int32_t x, int32_t y, int k)
+{
+    uint32_t rows = glyph_rows[i];
+    if (rows == 0xff)
+        return;
+    uint16_t g = font_small[i];
     int32_t w = p->s.w;
-    uint8_t ink = p->c, *row = p->s.px + y * w + x;
-    int top = -1, bot = 0;
-    uint32_t dots = 0;
-    for (int r = 0; r < 5; r++, row += w * k) {
+    int top = (int)(rows >> 4), bot = (int)(rows & 15);
+    uint8_t ink = p->c, *row = p->s.px + (y + top * k) * w + x;
+    for (int r = top; r <= bot; r++, row += w * k) {
         uint32_t bits = (g >> (12 - r * 3)) & 7;
-        if (!bits)
-            continue;
-        dots += (bits & 1) + ((bits >> 1) & 1) + (bits >> 2);
-        if (top < 0)
-            top = r;
-        bot = r;
         if (k == 1) {
             if (bits & 4) row[0] = ink;
             if (bits & 2) row[1] = ink;
             if (bits & 1) row[2] = ink;
-            continue;
-        }
-        for (int dy = 0; dy < k; dy++) {
-            uint8_t *d = row + dy * w;
-            for (int c = 0; c < 3; c++, d += k)
-                if ((bits >> (2 - c)) & 1)
-                    for (int dx = 0; dx < k; dx++)
-                        d[dx] = ink;
-        }
+        } else if (k == 2) {
+            for (uint8_t *d = row; d < row + 2 * w; d += w) {
+                if (bits & 4) d[0] = d[1] = ink;
+                if (bits & 2) d[2] = d[3] = ink;
+                if (bits & 1) d[4] = d[5] = ink;
+            }
+        } else
+            for (int dy = 0; dy < k; dy++) {
+                uint8_t *d = row + dy * w;
+                for (int c = 0; c < 3; c++, d += k)
+                    if ((bits >> (2 - c)) & 1)
+                        for (int dx = 0; dx < k; dx++)
+                            d[dx] = ink;
+            }
     }
-    if (top >= 0) {
-        p->count += dots * (uint32_t)(k * k);
-        row_touched(p, y + top * k);
-        row_touched(p, y + bot * k + k - 1);
-    }
+    p->count += glyph_dots[i] * (uint32_t)(k * k);
+    area_touched(p, y + top * k, x, x + 3 * k - 1);
+    area_touched(p, y + bot * k + k - 1, x, x + 3 * k - 1);
 }
 
 /* Draws text at (x, y) in camera space, or with draw 0 only measures it.
@@ -1619,6 +2867,11 @@ static int64_t text(struct pen *p, const char *s, uint32_t n, int64_t x,
     int64_t cx = x;
     *widest = 0;
     *lines = 1;
+    if (draw && !glyph_known)
+        glyph_table();
+    /* whether the line's glyphs lie inside the clip's rows, once a line */
+    int rows_in = draw && !p->pat && y + p->oy >= p->cy0 &&
+                  y + p->oy + 5 * k <= p->cy1;
     for (uint32_t i = 0; i < n; i++) {
         uint8_t ch = (uint8_t)s[i];
         if (ch == '\n') {
@@ -1627,6 +2880,8 @@ static int64_t text(struct pen *p, const char *s, uint32_t n, int64_t x,
             cx = x;
             y += 6 * k;
             (*lines)++;
+            rows_in = draw && !p->pat && y + p->oy >= p->cy0 &&
+                      y + p->oy + 5 * k <= p->cy1;
             continue;
         }
         if (ch >= 0x80 && ch < 0xc0)
@@ -1636,10 +2891,10 @@ static int64_t text(struct pen *p, const char *s, uint32_t n, int64_t x,
         uint16_t g = font_small[ch - 32];
         if (draw && g)
             p->cost += k == 1 ? COST_GLYPH : COST_BIG_GLYPH;
-        if (draw && g && !p->pat && cx + p->ox >= p->cx0 &&
-            y + p->oy >= p->cy0 && cx + p->ox + 3 * k <= p->cx1 &&
-            y + p->oy + 5 * k <= p->cy1) {
-            glyph(p, g, (int32_t)(cx + p->ox), (int32_t)(y + p->oy), k);
+        if (draw && g && rows_in && cx + p->ox >= p->cx0 &&
+            cx + p->ox + 3 * k <= p->cx1) {
+            glyph(p, ch - 32u, (int32_t)(cx + p->ox), (int32_t)(y + p->oy),
+                  k);
         } else if (draw && g) {
             for (int r = 0; r < 5; r++)
                 for (int c = 0; c < 3; c++)
@@ -1714,15 +2969,15 @@ static const uint8_t *text_glyph(struct vm *vm, uint32_t cp, uint8_t *buf)
 static const uint8_t *cart_find(const struct cartfont *f, uint32_t cp)
 {
     /* most fonts run unbroken from their first codepoint */
-    uint32_t guess = cp - le32(f->index);
-    if (guess < f->n && le32(f->index + guess * 8) == cp)
-        return f->glyphs + le32(f->index + guess * 8 + 4);
+    uint32_t guess = cp - rd_le32(f->index);
+    if (guess < f->n && rd_le32(f->index + guess * 8) == cp)
+        return f->glyphs + rd_le32(f->index + guess * 8 + 4);
     int32_t lo = 0, hi = (int32_t)f->n - 1;
     while (lo <= hi) {
         int32_t m = (lo + hi) / 2;
-        uint32_t at = le32(f->index + m * 8);
+        uint32_t at = rd_le32(f->index + m * 8);
         if (at == cp)
-            return f->glyphs + le32(f->index + m * 8 + 4);
+            return f->glyphs + rd_le32(f->index + m * 8 + 4);
         if (at < cp)
             lo = m + 1;
         else
@@ -1839,7 +3094,7 @@ static int64_t text_wide(struct vm *vm, struct pen *p, const char *s,
     int32_t line = f ? f->line : TEXT_LINE;
     int64_t cx = x;
     if (draw)
-        p->per16 = PER16_TEXT;
+        p->per256 = PER16_TEXT * 16;
     *widest = 0;
     *lines = 1;
     for (uint32_t i = 0; i < n;) {
@@ -1903,9 +3158,11 @@ NATIVE(print)
     int lines;
     begin(vm, &p, c, 0);
     int wide = vm->d.font >= 2;
-    int64_t end = wide ? text_wide(vm, &p, buf, n, x, y, k, 1, &widest,
+    int32_t tx = x, ty = y;         /* its corner turned, the text upright */
+    turn_px(&vm->d, &tx, &ty);
+    int64_t end = wide ? text_wide(vm, &p, buf, n, tx, ty, k, 1, &widest,
                                    &lines)
-                       : text(&p, buf, n, x, y, k, 1, &widest, &lines);
+                       : text(&p, buf, n, tx, ty, k, 1, &widest, &lines);
     finish(vm, &p);
     vm->d.cur_x = x;
     vm->d.cur_y = (int32_t)clampc((int64_t)y +
@@ -1920,14 +3177,156 @@ NATIVE(textw)
     if (!vm_parts(vm, a, argc, "textw"))
         return 0;
     uint32_t n = gather(vm, a, argc, buf, sizeof(text_buf));
-    int64_t widest;
-    int lines;
-    if (vm->d.font >= 2)
-        text_wide(vm, NULL, buf, n, 0, 0, scale_of(vm), 0, &widest, &lines);
-    else
-        text(NULL, buf, n, 0, 0, scale_of(vm), 0, &widest, &lines);
-    *out = mk(T_INT, (int32_t)widest);
+    *out = mk(T_INT, text_width(vm, buf, n));
     return 1;
+}
+
+/* imgw(i), imgh(i): an image's width and height, a lazy one's too */
+static int img_side(struct vm *vm, struct value v, int height,
+                    struct value *out)
+{
+    if (v.tag == T_LAZY) {
+        const struct lazyimg *r = MEM(vm, (uint32_t)v.v);
+        vm_charge(vm, 2);
+        *out = mk(T_INT, height ? r->h : r->w);
+        return 1;
+    }
+    if (v.tag != T_IMG)
+        return vm_fail(vm, height ? "imgh" : "imgw",
+                       "() needs an image, IMG.name or one img() made", "");
+    struct img *im = MEM(vm, (uint32_t)v.v);
+    vm_charge(vm, 2);
+    *out = mk(T_INT, height ? im->height : im->width);
+    return 1;
+}
+
+/* The lazy cart image v names, as its T_LAZY or the copy img.load()
+ * made; NULL when it names none */
+static struct lazyimg *lazy_of(struct vm *vm, struct value v)
+{
+    for (uint32_t i = 0; i < vm->nlazyimgs; i++) {
+        struct lazyimg *r = &vm->lazyimgs[i];
+        uint32_t off = (uint32_t)((uint8_t *)r - vm->mem);
+        if ((v.tag == T_LAZY && (uint32_t)v.v == off) ||
+            (v.tag == T_IMG && r->copy && (uint32_t)v.v == r->copy))
+            return r;
+    }
+    return NULL;
+}
+
+/* img.load(IMG.name): a lazy image read from the cart file into a copy on
+ * the heap, which IMG.name then is; the copy again when it is loaded, and
+ * any image already in memory as it is. Returns the image. */
+NATIVE(img_load)
+{
+    (void)argc;
+    struct lazyimg *r = lazy_of(vm, a[0]);
+    if (!r) {
+        if (a[0].tag != T_IMG)
+            return bad(vm, "img.load", "() needs one of the cart's images, "
+                       "IMG.name, not a ", a[0]);
+        *out = a[0];
+        vm_charge(vm, COST_CALL);
+        return 1;
+    }
+    if (!r->copy) {
+        uint32_t bytes = (uint32_t)r->w * r->h;
+        uint32_t off = gc_alloc(vm, T_IMG, (uint32_t)(sizeof(struct img) -
+                                                      sizeof(struct hdr)) +
+                                bytes);
+        if (!off)
+            return 0;
+        struct img *im = MEM(vm, off);
+        im->width = r->w;
+        im->height = r->h;
+        struct value v = mk(T_IMG, (int32_t)off);
+        if (!vm_root(vm, v))
+            return 0;
+        int ok = lazy_unpack(vm, &vm->imgc[r->chunk], im->px, bytes);
+        vm_unroot(vm);
+        if (!ok)
+            return 0;
+        r->copy = off;
+        vm->globals[r->slot] = v;
+        /* measured on the ARM rig (lzcost): about 13 cycles a pixel, made
+         * and unpacked into */
+        vm_charge(vm, COST_CALL + bytes * 3 / 10);
+    }
+    *out = mk(T_IMG, (int32_t)r->copy);
+    return 1;
+}
+
+/* img.drop(IMG.name): a lazy image's copy let go, IMG.name lazy again; a
+ * copy the cart keeps elsewhere stays until it lets that go too */
+NATIVE(img_drop)
+{
+    (void)argc; (void)out;
+    struct lazyimg *r = lazy_of(vm, a[0]);
+    if (!r)
+        return vm_fail(vm, "img.drop() needs an image listed in cart.json's "
+                       "lazy_images, IMG.name", "", "");
+    if (r->copy) {
+        r->copy = 0;
+        vm->globals[r->slot] = mk(T_LAZY, (int32_t)((uint8_t *)r - vm->mem));
+    }
+    vm_charge(vm, COST_CALL);
+    return 1;
+}
+
+NATIVE(imgw) { (void)argc; return img_side(vm, a[0], 0, out); }
+NATIVE(imgh) { (void)argc; return img_side(vm, a[0], 1, out); }
+
+/* textfit(s, w, [more]): s whole when it fits w pixels in the font set,
+ * else cut before a character, spaces at the cut dropped, with more
+ * ("..." when left out) after it, so the two fit. */
+NATIVE(textfit)
+{
+    static char more_buf[64];
+    if (a[0].tag != T_STR || !is_num(a[1]) ||
+        (argc > 2 && a[2].tag != T_STR))
+        return vm_fail(vm, "textfit() needs text, a width, and the text "
+                       "to end a cut one with", "", "");
+    const struct str *s = STR(vm, a[0]);
+    int32_t w = floor_int(a[1]);
+    uint32_t n = s->len < sizeof(text_buf) ? s->len : sizeof(text_buf) - 1;
+    memcpy(text_buf, s->b, n);
+    vm_charge(vm, 10 + n / 8);
+    if (n == s->len && text_width(vm, text_buf, n) <= w) {
+        *out = a[0];
+        return 1;
+    }
+    uint32_t mn = 3;
+    if (argc > 2) {
+        mn = STR(vm, a[2])->len < sizeof(more_buf) ? STR(vm, a[2])->len
+                                                    : sizeof(more_buf) - 1;
+        memcpy(more_buf, STR(vm, a[2])->b, mn);
+    } else {
+        memcpy(more_buf, "...", 3);
+    }
+    int32_t room = w - text_width(vm, more_buf, mn);
+    /* each character's first byte, then the longest run of them that fits:
+     * found by halving, a width measured each step */
+    static uint16_t starts[sizeof(text_buf)];
+    uint32_t count = 0;
+    for (uint32_t i = 1; i <= n; i++)
+        if (i == n || ((unsigned char)text_buf[i] & 0xc0) != 0x80)
+            starts[count++] = (uint16_t)i;
+    int32_t lo = -1, hi = (int32_t)count - 1;   /* lo fits, past hi not */
+    while (lo < hi) {
+        int32_t mid = (lo + hi + 1) / 2;
+        if (text_width(vm, text_buf, starts[mid]) <= room)
+            lo = mid;
+        else
+            hi = mid - 1;
+    }
+    uint32_t cut = lo < 0 ? 0 : starts[lo];
+    while (cut > 0 && text_buf[cut - 1] == ' ')
+        cut--;
+    if (cut + mn >= sizeof(text_buf))
+        cut = (uint32_t)sizeof(text_buf) - 1 - mn;
+    memcpy(text_buf + cut, more_buf, mn);
+    vm_charge(vm, 10 * 11);
+    return vm_new_string(vm, (const uint8_t *)text_buf, cut + mn, out);
 }
 
 NATIVE(texth)
@@ -2092,23 +3491,46 @@ static void copy_rect(struct pen *p, const uint8_t *src, int32_t sw_img,
         }
         if (u0 >= u1)
             return;
+        /* the pen's own table, every colour itself and none clear, and
+         * not flipped: rows copied whole */
+        const int plain = xl == p->d->xlat && p->d->xlat_plain && !fx;
         if (v1 > v0)
-            p->cost += (uint32_t)((v1 - v0) * (u1 - u0)) * PER16_COPY / 16;
+            p->cost += (uint32_t)((v1 - v0) * (u1 - u0)) *
+                       (plain ? PLAIN256 : PER16_COPY * 16) / 256;
         int32_t ua = (int32_t)u0, ub = (int32_t)u1;
-        for (int32_t v = (int32_t)v0; v < (int32_t)v1; v++) {
+        /* A surface copied onto itself: each row read whole before it is
+         * written, and the rows taken from the bottom when the copy moves
+         * down, so every host draws the source as it was */
+        static uint8_t bounce[IMG_MAX];
+        const int self = src == p->s.px;
+        const int up = self && !fy && dy > sy;
+        for (int32_t k = (int32_t)v0; k < (int32_t)v1; k++) {
+            int32_t v = up ? (int32_t)v1 - 1 - (k - (int32_t)v0) : k;
             int32_t yy = (int32_t)sy + (fy ? (int32_t)h - 1 - v : v);
             if (yy < 0 || yy >= sh_img)
                 continue;
             const uint8_t *srow = src + yy * sw_img;
+            if (self) {
+                memcpy(bounce, srow, (size_t)sw_img);
+                srow = bounce;
+            }
             uint8_t *drow = p->s.px + ((int32_t)dy + v) * stride + (int32_t)dx;
-            uint32_t n = fx ? copy_row(drow + ua, srow + (int32_t)sx +
-                                       (int32_t)w - 1 - ua, ub - ua, -1, xl)
-                            : copy_row_forward(drow + ua,
-                                               srow + (int32_t)sx + ua,
-                                               ub - ua, xl);
+            uint32_t n;
+            if (fx)
+                n = copy_row(drow + ua, srow + (int32_t)sx + (int32_t)w - 1 -
+                             ua, ub - ua, -1, xl);
+            else if (plain) {
+                /* nothing clear and no colour swapped: a plain copy, about
+                 * 0.7 cycles a pixel on the rig against 12 */
+                memcpy(drow + ua, srow + (int32_t)sx + ua, (size_t)(ub - ua));
+                n = (uint32_t)(ub - ua);
+            } else
+                n = copy_row_forward(drow + ua, srow + (int32_t)sx + ua,
+                                     ub - ua, xl);
             if (n) {
                 p->count += n;
-                row_touched(p, (int32_t)dy + v);
+                area_touched(p, (int32_t)dy + v, (int32_t)dx + ua,
+                             (int32_t)dx + ub - 1);
             }
         }
         return;
@@ -2160,7 +3582,8 @@ static void copy_rect(struct pen *p, const uint8_t *src, int32_t sw_img,
             n = scaled_row(drow + u0, srow, col, cols, xl);
             if (n) {
                 p->count += n;
-                row_touched(p, (int32_t)(dy + v));
+                area_touched(p, (int32_t)(dy + v), (int32_t)(dx + u0),
+                             (int32_t)(dx + u1 - 1));
             }
             continue;
         }
@@ -2182,7 +3605,8 @@ static void copy_rect(struct pen *p, const uint8_t *src, int32_t sw_img,
         }
         if (n) {
             p->count += n;
-            row_touched(p, (int32_t)(dy + v));
+            area_touched(p, (int32_t)(dy + v), (int32_t)(dx + u0),
+                         (int32_t)(dx + u1 - 1));
         }
     }
 }
@@ -2215,8 +3639,8 @@ static void tile8(struct pen *p, const uint8_t *src, int32_t stride,
     }
     if (top >= 0) {
         p->count += total;
-        row_touched(p, y + top);
-        row_touched(p, y + bot);
+        area_touched(p, y + top, x, x + 7);
+        area_touched(p, y + bot, x, x + 7);
     }
 }
 
@@ -2332,14 +3756,17 @@ NATIVE(spr)
     sheet_of(vm, &sh);
     if (n < 0 || n >= sh.count)
         return 1;
-    int fx = flag(vm, a, argc, 5), fy = flag(vm, a, argc, 6);
+    WHOLE(5, 0, flip, "spr");
+    int fx = FLIP_X(flip), fy = FLIP_Y(flip);
+    turn_box(&vm->d, &x, &y, (int32_t)w, (int32_t)h);
     struct pen p;
     int32_t tx, ty;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;                    /* tile8 and copy_rect charge */
-    if (w == 8 && h == 8 && !fx && !fy && tile_inside(&p, x, y, &tx, &ty))
+    p.per256 = 0;                    /* tile8 and copy_rect charge */
+    if (w == 8 && h == 8 && !fx && !fy && tile_inside(&p, x, y, &tx, &ty)) {
+        p.cost += COST_SPRITE;
         tile8(&p, cell_px(&sh, (int32_t)n), sh.w, tx, ty);
-    else if (!clipped_out(&p, x, y, w, h))
+    } else if (!clipped_out(&p, x, y, w, h))
         copy_rect(&p, sh.px, sh.w, sh.h, cell_x(&sh, (int32_t)n),
                   cell_y(&sh, (int32_t)n), w, h, x, y, w, h, fx, fy);
     finish(vm, &p);
@@ -2357,13 +3784,15 @@ NATIVE(sspr)
     WHOLE(5, 0, dy, "sspr");
     WHOLE(6, sw, dw, "sspr");
     WHOLE(7, sh, dh, "sspr");
+    WHOLE(8, 0, flip, "sspr");
     struct sheet src;
     sheet_of(vm, &src);
+    turn_box(&vm->d, &dx, &dy, dw, dh);
     struct pen p;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;                    /* copy_rect charges what it reads */
+    p.per256 = 0;                    /* copy_rect charges what it reads */
     copy_rect(&p, src.px, src.w, src.h, sx, sy, sw, sh,
-              dx, dy, dw, dh, flag(vm, a, argc, 8), flag(vm, a, argc, 9));
+              dx, dy, dw, dh, FLIP_X(flip), FLIP_Y(flip));
     finish(vm, &p);
     return 1;
 }
@@ -2407,7 +3836,7 @@ NATIVE(fget)
     return 1;
 }
 
-/* fset(n, v) all eight flags; fset(n, f, v) flag f. */
+/* fset(n, v) all eight flags; fset(n, v, f) flag f. */
 NATIVE(fset)
 {
     (void)out;
@@ -2420,9 +3849,9 @@ NATIVE(fset)
         flags[n] = (uint8_t)v;
         return 1;
     }
-    WHOLE(1, 0, f, "fset");
+    WHOLE(2, 0, f, "fset");
     if ((uint32_t)f < 8) {
-        if (vm_truthy(vm, a[2]))
+        if (vm_truthy(vm, a[1]))
             flags[n] |= (uint8_t)(1 << f);
         else
             flags[n] &= (uint8_t)~(1 << f);
@@ -2450,8 +3879,7 @@ NATIVE(img)
     return 1;
 }
 
-/* blit(i, x, y, [fx], [fy]): all of image i, or of the screen or a
- * border. */
+/* blit(i, x, y, [flip]): all of image i, or of the screen or a border. */
 NATIVE(blit)
 {
     (void)out;
@@ -2460,16 +3888,18 @@ NATIVE(blit)
         return 0;
     WHOLE(1, 0, x, "blit");
     WHOLE(2, 0, y, "blit");
+    WHOLE(3, 0, flip, "blit");
+    turn_box(&vm->d, &x, &y, s.w, s.h);
     struct pen p;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;                    /* copy_rect charges what it reads */
+    p.per256 = 0;                    /* copy_rect charges what it reads */
     copy_rect(&p, s.px, s.w, s.h, 0, 0, s.w, s.h, x, y, s.w, s.h,
-              flag(vm, a, argc, 3), flag(vm, a, argc, 4));
+              FLIP_X(flip), FLIP_Y(flip));
     finish(vm, &p);
     return 1;
 }
 
-/* blitpart(i, sx, sy, w, h, x, y, [fx], [fy]) */
+/* blitpart(i, sx, sy, w, h, x, y, [flip]) */
 NATIVE(blitpart)
 {
     (void)out;
@@ -2482,11 +3912,13 @@ NATIVE(blitpart)
     WHOLE(4, 0, h, "blitpart");
     WHOLE(5, 0, x, "blitpart");
     WHOLE(6, 0, y, "blitpart");
+    WHOLE(7, 0, flip, "blitpart");
+    turn_box(&vm->d, &x, &y, w, h);
     struct pen p;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;                    /* copy_rect charges what it reads */
+    p.per256 = 0;                    /* copy_rect charges what it reads */
     copy_rect(&p, s.px, s.w, s.h, sx, sy, w, h, x, y, w, h,
-              flag(vm, a, argc, 7), flag(vm, a, argc, 8));
+              FLIP_X(flip), FLIP_Y(flip));
     finish(vm, &p);
     return 1;
 }
@@ -2596,13 +4028,16 @@ static int scale_arg(struct vm *vm, struct value *a, int argc, int i,
 }
 
 /* rspr(n, x, y, angle, [scale], [w], [h], [flip]): sprite n, w by h
- * sprites as spr takes them, turned about its centre at x, y */
+ * sprites as spr takes them, turned about its centre at x, y. Flipped up
+ * and down is flipped across and turned half round, so the rows need only
+ * the one mirror. */
 NATIVE(rspr)
 {
     (void)out;
     WHOLE(0, 0, n, "rspr");
     WHOLE(5, 1, w, "rspr");
     WHOLE(6, 1, h, "rspr");
+    WHOLE(7, 0, flip, "rspr");
     int64_t x, y, angle;
     int32_t scale;
     if (!real(vm, a, argc, 1, 0, "rspr", &x) ||
@@ -2619,14 +4054,17 @@ NATIVE(rspr)
     if (h > (sh.h - sy) / 8) h = (sh.h - sy) / 8;
     struct pen p;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;
+    p.per256 = 0;
     struct turn t;
     t.src = sh.px + sy * sh.w + sx;
     t.stride = sh.w;
     t.sw = (uint32_t)w * 8;
     t.sh = (uint32_t)h * 8;
-    t.flip = flag(vm, a, argc, 7);
+    t.flip = FLIP_X(flip) ^ FLIP_Y(flip);
     t.xl = p.xl;
+    if (FLIP_Y(flip))
+        angle += 0x8000;
+    turn_turned(&vm->d, &x, &y, &angle, &scale);
     turned(&p, &t, x, y, wrap32(angle), scale);
     finish(vm, &p);
     return 1;
@@ -2648,7 +4086,7 @@ NATIVE(rblit)
         return 0;
     struct pen p;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;
+    p.per256 = 0;
     struct turn t;
     t.src = s.px;
     t.stride = s.w;
@@ -2656,6 +4094,7 @@ NATIVE(rblit)
     t.sh = (uint32_t)s.h;
     t.flip = 0;
     t.xl = p.xl;
+    turn_turned(&vm->d, &x, &y, &angle, &scale);
     turned(&p, &t, x, y, wrap32(angle), scale);
     finish(vm, &p);
     return 1;
@@ -2665,22 +4104,35 @@ NATIVE(rblit)
 
 /* map(celx, cely, sx, sy, celw, celh, [layers]): each cell's sprite, if
  * not 0 and its flags include all of layers. */
+/* map(celx, cely, sx, sy, celw, celh, [layers], [cells, w]): the active
+ * map's cells, or with cells -- a Uint8Array, w cells a row, a map
+ * loadmap() unpacked into it or any other -- those: a second layer drawn
+ * under or over the first, a backdrop, a level made in code */
 NATIVE(map)
 {
     (void)out;
+    uint8_t *map = MEM(vm, vm->map), *flags = MEM(vm, vm->flags);
+    int32_t mw = vm->map_w, mh = vm->map_h;
+    if (argc > 7 && a[7].tag != T_NULL) {
+        WHOLE(8, 0, w, "map");
+        if (a[7].tag != T_U8 || w <= 0)
+            return vm_fail(vm, "map() draws cells from a Uint8Array, w a row",
+                           "", "");
+        map = U8A(vm, a[7])->d;
+        mw = w;
+        mh = (int32_t)(U8A(vm, a[7])->len / (uint32_t)w);
+    }
     WHOLE(0, 0, cx, "map");
     WHOLE(1, 0, cy, "map");
     WHOLE(2, 0, sx, "map");
     WHOLE(3, 0, sy, "map");
-    WHOLE(4, vm->map_w, cw, "map");
-    WHOLE(5, vm->map_h, ch, "map");
+    WHOLE(4, mw, cw, "map");
+    WHOLE(5, mh, ch, "map");
     WHOLE(6, 0, layers, "map");
-    uint8_t *map = MEM(vm, vm->map), *flags = MEM(vm, vm->flags);
     struct pen p;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;                    /* tile8 and copy_rect charge */
+    p.per256 = 0;                    /* tile8 and copy_rect charge */
     int64_t j0 = cy < 0 ? -(int64_t)cy : 0, i0 = cx < 0 ? -(int64_t)cx : 0;
-    const int32_t mw = vm->map_w, mh = vm->map_h;
     int64_t j1 = (int64_t)mh - cy < ch ? (int64_t)mh - cy : ch;
     int64_t i1 = (int64_t)mw - cx < cw ? (int64_t)mw - cx : cw;
     if (j0 >= j1 || i0 >= i1) {
@@ -2775,16 +4227,28 @@ NATIVE(mapw)
     return 1;
 }
 
+/* loadmap(MAP.name, [cells]): the active map, as it was built; or with
+ * cells, a Uint8Array, the map's cells unpacked into it instead, the active
+ * map untouched. The map's width. */
 NATIVE(loadmap)
 {
-    (void)out;
     WHOLE(0, 0, n, "loadmap");
     if (n < 0 || (uint32_t)n >= vm->nmaps)
         return vm_fail(vm, "loadmap() needs one of the cart's maps, MAP.name",
                        "", "");
-    if (!use_map(vm, (uint32_t)n))
+    const struct mapinfo *m = &vm->mapdir[n];
+    uint32_t cells = (uint32_t)m->w * m->h;
+    if (argc > 1) {
+        if (a[1].tag != T_U8 || U8A(vm, a[1])->len < cells)
+            return vm_fail(vm, "loadmap() unpacks into a Uint8Array of the "
+                           "map's width times its height", "", "");
+        if (!map_cells(vm, m, U8A(vm, a[1])->d, cells))
+            return 0;
+    } else if (!use_map(vm, (uint32_t)n)) {
         return 0;
-    vm_charge(vm, COST_CALL + (uint32_t)vm->map_w * vm->map_h / BYTES_PER_UNIT);
+    }
+    vm_charge(vm, COST_CALL + cells / BYTES_PER_UNIT);
+    *out = mk(T_INT, m->w);
     return 1;
 }
 
@@ -2849,7 +4313,7 @@ NATIVE(mapprop)
         uint32_t type = p[2];
         if (key->len == want->len && !memcmp(key->b, want->b, key->len)) {
             *out = type ? mk(T_STR, (int32_t)vm->strings[le16(p + 3)])
-                        : mk(T_INT, (int32_t)le32(p + 3));
+                        : mk(T_INT, (int32_t)rd_le32(p + 3));
             break;
         }
         p += 3 + (type ? 2 : 4);
@@ -2876,17 +4340,41 @@ static void full_clip(struct vm *vm)
     vm->d.clip_y1 = s.h;
 }
 
+/* camera([x, y], [turn], [px], [py], [zoom]): what is drawn at x, y lands
+ * at the target's corner, and with turn (in turns, clockwise) and zoom
+ * the picture is turned and grown about px, py on the target, its middle
+ * when left out */
 NATIVE(camera)
 {
     (void)out;
     WHOLE(0, 0, x, "camera");
     WHOLE(1, 0, y, "camera");
-    vm->d.cam_x = x;
-    vm->d.cam_y = y;
+    struct draw *d = &vm->d;
+    d->cam_x = x;
+    d->cam_y = y;
+    d->cam_turn = argc > 2 && is_num(a[2])
+                  ? (int32_t)(wrap32(scaled(a[2])) & 0xffff) : 0;
+    struct surf s;
+    surf_of(vm, d->target, &s, "camera");
+    d->cam_px = argc > 3 && is_num(a[3]) ? wrap32(scaled(a[3])) : s.w << 15;
+    d->cam_py = argc > 4 && is_num(a[4]) ? wrap32(scaled(a[4])) : s.h << 15;
+    int64_t zoom;
+    if (!real(vm, a, argc, 5, 0x10000, "camera", &zoom))
+        return 0;
+    if (zoom < 0x1000 || zoom > (16 << 16))
+        return vm_fail(vm, "camera", "() takes a zoom from 1/16 to 16",
+                       "");
+    d->cam_zoom = (int32_t)zoom;
+    d->cam_moved = d->cam_turn || zoom != 0x10000;
+    d->cam_cos = (int32_t)(((int64_t)core_sine((uint32_t)d->cam_turn +
+                                               0x4000) * zoom) >> 16);
+    d->cam_sin = (int32_t)(((int64_t)core_sine((uint32_t)d->cam_turn) *
+                            zoom) >> 16);
     return 1;
 }
 
-/* clip(x, y, w, h), in target pixels; clip() the whole target. */
+/* clip(x0, y0, x1, y1), two corners in target pixels, both inside, as
+ * rect takes them; clip() the whole target. */
 NATIVE(clip)
 {
     (void)out;
@@ -2894,14 +4382,14 @@ NATIVE(clip)
         full_clip(vm);
         return 1;
     }
-    WHOLE(0, 0, x, "clip");
-    WHOLE(1, 0, y, "clip");
-    WHOLE(2, 0, w, "clip");
-    WHOLE(3, 0, h, "clip");
-    vm->d.clip_x0 = x;
-    vm->d.clip_y0 = y;
-    vm->d.clip_x1 = (int32_t)clampc((int64_t)x + (w < 0 ? 0 : w));
-    vm->d.clip_y1 = (int32_t)clampc((int64_t)y + (h < 0 ? 0 : h));
+    WHOLE(0, 0, x0, "clip");
+    WHOLE(1, 0, y0, "clip");
+    WHOLE(2, 0, x1, "clip");
+    WHOLE(3, 0, y1, "clip");
+    vm->d.clip_x0 = x0;
+    vm->d.clip_y0 = y0;
+    vm->d.clip_x1 = (int32_t)clampc((int64_t)x1 + 1);
+    vm->d.clip_y1 = (int32_t)clampc((int64_t)y1 + 1);
     return 1;
 }
 
@@ -3040,7 +4528,7 @@ static int span_of(struct vm *vm, struct value v, const char *fn,
     *len = *size = 0;
     switch (v.tag) {
     case T_U8:  *len = U8A(vm, v)->len; *size = 1; return 1;
-    case T_I32: *len = I32(vm, v)->len; *size = 4; return 1;
+    case T_I32: case T_FXA: *len = I32(vm, v)->len; *size = 4; return 1;
     case T_ARR: *len = ARR(vm, v)->len; *size = sizeof(struct value);
                 return 1;
     }
@@ -3050,7 +4538,7 @@ static int span_of(struct vm *vm, struct value v, const char *fn,
 static void *elems(struct vm *vm, struct value v)
 {
     return v.tag == T_U8 ? (void *)U8A(vm, v)->d
-         : v.tag == T_I32 ? (void *)I32(vm, v)->d
+         : v.tag == T_I32 || v.tag == T_FXA ? (void *)I32(vm, v)->d
          : (void *)BUF(vm, ARR(vm, v)->buf)->v;
 }
 
@@ -3106,8 +4594,9 @@ NATIVE(fill)
         return bad(vm, "fill", "() puts numbers in a typed array, not a ", v);
     if (a[0].tag == T_U8)
         memset(U8A(vm, a[0])->d + i, (uint8_t)to_int(v), (uint32_t)n);
-    else if (a[0].tag == T_I32) {
-        int32_t *d = I32(vm, a[0])->d + i, x = to_int(v);
+    else if (a[0].tag == T_I32 || a[0].tag == T_FXA) {
+        int32_t *d = I32(vm, a[0])->d + i,
+                x = a[0].tag == T_FXA ? to_fix(v) : to_int(v);
         for (int32_t k = 0; k < n; k++)
             d[k] = x;
     } else {
@@ -3121,7 +4610,10 @@ NATIVE(fill)
 
 /* ---- for the systems ---------------------------------------------------- */
 
-static int32_t num_or_0(struct value v)
+/* always inlined: -Os would call it, and the particle loops call it
+ * several times a particle */
+static inline __attribute__((always_inline))
+int32_t num_or_0(struct value v)
 {
     return is_num(v) ? floor_int(v) : 0;
 }
@@ -3137,6 +4629,7 @@ int column_of(struct vm *vm, struct value v, struct column *c)
         c->len = ARR(vm, v)->len;
         return 1;
     case T_I32:
+    case T_FXA:
         c->p = I32(vm, v)->d;
         c->len = I32(vm, v)->len;
         return 1;
@@ -3165,6 +4658,8 @@ int32_t column_at(const struct column *c, uint32_t i, int32_t none)
     }
     case T_I32:
         return ((const int32_t *)c->p)[i];
+    case T_FXA:
+        return ((const int32_t *)c->p)[i] >> 16;
     case T_U8:
         return ((const uint8_t *)c->p)[i];
     case T_INT:
@@ -3180,6 +4675,8 @@ int32_t column_fix(const struct column *c, uint32_t i)
         struct value v = ((const struct value *)c->p)[i];
         return is_num(v) ? wrap32(scaled(v)) : 0;
     }
+    if (c->tag == T_FXA)
+        return ((const int32_t *)c->p)[i];
     return (int32_t)((uint32_t)column_at(c, i, 0) << 16);
 }
 
@@ -3191,6 +4688,8 @@ int column_true(struct vm *vm, const struct column *c, uint32_t i,
         return dflt;
     if (c->tag == T_ARR)
         return vm_truthy(vm, ((const struct value *)c->p)[i]);
+    if (c->tag == T_FXA)
+        return ((const int32_t *)c->p)[i] != 0;
     return column_at(c, i, 0) != 0;
 }
 
@@ -3207,7 +4706,7 @@ void core_draw_sprites(struct vm *vm, const struct column *on,
     struct sheet sh;
     sheet_of(vm, &sh);
     begin(vm, &p, 0, 0);
-    p.per16 = 0;                    /* tile8 and copy_rect charge */
+    p.per256 = 0;                    /* tile8 and copy_rect charge */
     for (uint32_t i = 0; i < n; i++) {
         int32_t s = column_at(sp, i, -1);
         if (s < 0 || s >= sh.count || !column_true(vm, on, i, 1))
@@ -3220,15 +4719,17 @@ void core_draw_sprites(struct vm *vm, const struct column *on,
             if (s >= sh.count)
                 continue;
         }
-        int64_t xx = column_at(x, i, 0), yy = column_at(y, i, 0);
-        int fl = column_true(vm, flip, i, 0);
+        int32_t sx = column_at(x, i, 0), sy = column_at(y, i, 0);
+        turn_box(&vm->d, &sx, &sy, 8, 8);
+        int64_t xx = sx, yy = sy;
+        int fl = column_at(flip, i, 0) & 3;
         int32_t tx, ty;
         p.cost += COST_CALL / 2;
         if (!fl && tile_inside(&p, xx, yy, &tx, &ty))
             tile8(&p, cell_px(&sh, s), sh.w, tx, ty);
         else if (!clipped_out(&p, xx, yy, 8, 8))
             copy_rect(&p, sh.px, sh.w, sh.h, cell_x(&sh, s), cell_y(&sh, s),
-                      8, 8, xx, yy, 8, 8, fl, 0);
+                      8, 8, xx, yy, 8, 8, FLIP_X(fl), FLIP_Y(fl));
     }
     finish(vm, &p);
 }
@@ -3266,11 +4767,14 @@ void core_draw_lines(struct vm *vm, const int32_t *seg, uint32_t n,
 {
     struct pen p;
     begin(vm, &p, c, 1);
-    p.per16 = PER16_DOT;
+    p.per256 = PER16_DOT * 16;
     for (uint32_t i = 0; i < n; i++, seg += 4) {
-        p.cost += 8;
-        walk_line(&p, seg[0], seg[1], seg[2], seg[3], plot_dot,
-                  p.pat ? NULL : run_dots, NULL);
+        p.cost += 18;               /* a line's setup, measured on the rig */
+        int32_t x0 = seg[0], y0 = seg[1], x1 = seg[2], y1 = seg[3];
+        turn_px(&vm->d, &x0, &y0);
+        turn_px(&vm->d, &x1, &y1);
+        walk_line(&p, x0, y0, x1, y1, plot_dot, p.pat ? NULL : run_dots,
+                  NULL);
     }
     finish(vm, &p);
 }
@@ -3285,38 +4789,127 @@ void core_draw_quads(struct vm *vm, const int32_t *q, const uint8_t *c,
     for (uint32_t i = 0; i < n; i++, q += 8) {
         int64_t t[6];
         p.c = p.d->dpal[c[i]];
-        p.cost += 8;
+        p.cost += 80;               /* two triangles' setup, measured */
+        int32_t w[8];
+        for (int k = 0; k < 8; k += 2) {
+            w[k] = q[k];
+            w[k + 1] = q[k + 1];
+            turn_px(&vm->d, &w[k], &w[k + 1]);
+        }
         for (int k = 0; k < 6; k++)
-            t[k] = clampc(q[k]);
+            t[k] = clampc(w[k]);
         fill_triangle(&p, t);
-        t[2] = clampc(q[6]);
-        t[3] = clampc(q[7]);
+        t[2] = clampc(w[6]);
+        t[3] = clampc(w[7]);
         fill_triangle(&p, t);
     }
     finish(vm, &p);
 }
 
-/* particles.draw(): each live particle a pixel of its colour */
-void core_draw_dots(struct vm *vm, const struct value *life,
-                    const struct value *x, const struct value *y,
-                    const struct value *c, uint32_t n)
+/* A sprite wholly inside the clip and wholly on its sheet, at dx, dy in
+ * surface pixels, flipped by fl (1 across, 2 up and down), through xl: a
+ * plain loop, without copy_rect's clipping, for the small sprites particle
+ * pools draw by the dozen */
+static void small_sprite(struct pen *p, const uint8_t *src, int32_t stride,
+                         int32_t w, int32_t h, int32_t dx, int32_t dy,
+                         int32_t fl, const uint16_t *xl)
 {
+    uint8_t *dst = p->s.px + dy * p->s.w + dx;
+    int32_t step = fl & 1 ? -1 : 1, first = fl & 1 ? w - 1 : 0;
+    uint32_t n = 0;
+    for (int32_t v = 0; v < h; v++, dst += p->s.w) {
+        const uint8_t *s = src + (fl & 2 ? h - 1 - v : v) * stride + first;
+        for (int32_t u = 0; u < w; u++, s += step) {
+            uint32_t c = xl[*s];
+            if (!(c & XLAT_CLEAR)) {
+                dst[u] = (uint8_t)c;
+                n++;
+            }
+        }
+    }
+    p->count += n;
+    p->cost += (uint32_t)(w * h) * PER16_SMALL / 16;
+    row_touched(p, dy);
+    row_touched(p, dy + h - 1);
+}
+
+/* particles.draw(): each live particle a pixel of its colour, or with a
+ * sprite (arr[6], flipped by arr[7]) the top left w x h of that sprite,
+ * its colours 1 to shade drawn as the particle's colour plus k - 1. The
+ * arrays are life, x, y, dx, dy, c, sp, flip. */
+void core_draw_particles(struct vm *vm, struct value *const *arr,
+                         uint32_t n, int32_t w, int32_t h, int32_t shade)
+{
+    const struct value *life = arr[0], *x = arr[1], *y = arr[2];
+    const struct value *c = arr[5], *sp = arr[6], *flip = arr[7];
     struct pen p;
+    struct sheet sh;
+    /* the colours a shaded sprite is drawn in: the draw palette's, with
+     * 1 to shade moved along to the particle's ramp each time */
+    static uint16_t ramp[256];
+    sheet_of(vm, &sh);
     begin(vm, &p, 0, 0);
-    p.per16 = PER16_DOT;
+    p.per256 = 0;                    /* copy_rect charges; dots below */
     p.cost += n / 8;
+    const uint16_t *plain = p.xl;
+    uint32_t dots = 0;
+    int32_t ramp_of = -1;           /* the colour ramp[] holds, -1 none */
+    if (shade)
+        memcpy(ramp, plain, sizeof(ramp));
     for (uint32_t i = 0; i < n; i++) {
         if (num_or_0(life[i]) <= 0)
             continue;
-        int64_t px = (int64_t)num_or_0(x[i]) + p.ox;
-        int64_t py = (int64_t)num_or_0(y[i]) + p.oy;
+        int32_t s = num_or_0(sp[i]), col = num_or_0(c[i]) & 0xff;
+        if (s > 0) {
+            if (s >= sh.count)
+                continue;
+            int32_t sx = num_or_0(x[i]), sy = num_or_0(y[i]);
+            turn_box(&vm->d, &sx, &sy, w, h);
+            int64_t xx = sx, yy = sy;
+            p.cost += COST_CALL / 2;
+            const uint16_t *xl = plain;
+            if (shade && col > 0) {
+                /* the ramp made again only for a new colour: debris from
+                 * one brick shares one */
+                if (col != ramp_of) {
+                    for (int32_t k = 1; k <= shade; k++)
+                        ramp[k] = plain[(col + k - 1) & 0xff];
+                    ramp_of = col;
+                }
+                xl = ramp;
+            }
+            int32_t fl = num_or_0(flip[i]);
+            int64_t dx = xx + p.ox, dy = yy + p.oy;
+            /* a 16 x 16 sprite at the sheet's right or bottom edge reaches
+             * past it: copy_rect clips that */
+            if (dx >= p.cx0 && dx + w <= p.cx1 && dy >= p.cy0 &&
+                dy + h <= p.cy1 && cell_x(&sh, s) + w <= sh.w &&
+                cell_y(&sh, s) + h <= sh.h) {
+                p.cost += COST_SMALL;
+                small_sprite(&p, cell_px(&sh, s), sh.w, w, h, (int32_t)dx,
+                             (int32_t)dy, fl, xl);
+            } else if (!clipped_out(&p, xx, yy, w, h)) {
+                p.xl = xl;
+                copy_rect(&p, sh.px, sh.w, sh.h, cell_x(&sh, s),
+                          cell_y(&sh, s), w, h, xx, yy, w, h, fl & 1,
+                          (fl & 2) != 0);
+                p.xl = plain;
+            }
+            continue;
+        }
+        int32_t qx = num_or_0(x[i]), qy = num_or_0(y[i]);
+        turn_px(&vm->d, &qx, &qy);
+        int64_t px = (int64_t)qx + p.ox, py = (int64_t)qy + p.oy;
         if (px < p.cx0 || px >= p.cx1 || py < p.cy0 || py >= p.cy1)
             continue;
-        p.s.px[(int32_t)py * p.s.w + (int32_t)px] =
-            p.d->dpal[num_or_0(c[i]) & 0xff];
+        p.s.px[(int32_t)py * p.s.w + (int32_t)px] = p.d->dpal[col];
         p.count++;
+        dots++;
         row_touched(&p, (int32_t)py);
     }
+    /* a pixel particle's reading of its arrays costs more than its pixel:
+     * about 6 units a particle in all, measured */
+    p.cost += dots * (5 + PER16_DOT / 16);
     finish(vm, &p);
 }
 
@@ -3802,7 +5395,7 @@ uint32_t core_draw_land(struct vm *vm, const struct landspec *l)
 {
     struct pen p;
     begin_view(vm, &p);
-    p.per16 = 0;
+    p.per256 = 0;
     const struct planeview *v = &vm->plane;
     static int16_t top[SCREEN_W];
     struct slice sl;
@@ -3904,7 +5497,9 @@ uint32_t core_draw_land(struct vm *vm, const struct landspec *l)
         row_touched(&p, lo);
         row_touched(&p, p.cy1 - 1);
     }
-    p.cost += samples * 5 / 4 + filled / 4;
+    /* measured on the ARM rig (drawprobe): a smooth sample, with a ramp,
+     * costs twice a plain one */
+    p.cost += samples * (l->ramp ? 11 : 5) / 4 + filled / 4;
     finish(vm, &p);
     return samples;
 }
@@ -3935,7 +5530,7 @@ void core_draw_floor(struct vm *vm, const struct floor_row *rows,
     struct pen p;
     struct floor_env e;
     begin_view(vm, &p);
-    p.per16 = 0;                    /* each pixel read is charged */
+    p.per256 = 0;                    /* each pixel read is charged */
     const uint8_t *sheet = MEM(vm, vm->sheet);
     for (uint32_t m = 0; m < 256; m++) {
         uint32_t s = remap ? remap[m] : m;
@@ -3980,18 +5575,32 @@ void core_draw_floor(struct vm *vm, const struct floor_row *rows,
                              (uint32_t)du, (uint32_t)dv, &e);
                 read += (uint32_t)n * PER16_EDGE;
             }
-            if (step == 2)
-                for (int32_t i = 0, x = x0; x < x1; i++, x += 2) {
+            if (step == 2) {
+                /* each sample twice: two samples a 32-bit store where
+                 * the row starts on a word (the player is little-endian:
+                 * the first sample is the low half), else a byte at a
+                 * time */
+                int32_t i = 0, x = x0;
+                if (!((uintptr_t)(px + x0) & 3)) {
+                    uint32_t *d = (uint32_t *)(void *)(px + x0);
+                    for (; x + 3 < x1; i += 2, x += 4)
+                        *d++ = (half[i] | (uint32_t)half[i + 1] << 16) *
+                               0x0101u;
+                }
+                for (; x < x1; i++, x += 2) {
                     px[x] = half[i];
                     if (x + 1 < x1)
                         px[x + 1] = half[i];
                 }
+                read += (uint32_t)(x1 - x0) * 3;    /* measured on the 5G */
+            }
             if (r->fog)
                 fog_row(px, y, x0, x1, r->fog, fogc);
         }
         row_touched(&p, top);
         row_touched(&p, bottom);
-        p.cost += read / 16 + 64;
+        /* the rig's per-16 figures, times 7/6 as timed on the 5G */
+        p.cost += read * 7 / 96 + 64;
     }
     finish(vm, &p);
 }
@@ -4008,7 +5617,7 @@ static void billboard_copy(struct pen *p, const struct sheet *sh, int32_t s,
                            uint8_t fogc)
 {
     copy_rect(p, sh->px, sh->w, sh->h, cell_x(sh, s), cell_y(sh, s),
-              cw * 8, ch * 8, x, y, w, h, flip, 0);
+              cw * 8, ch * 8, x, y, w, h, FLIP_X(flip), FLIP_Y(flip));
     if (fog <= 0)
         return;
     static uint8_t mask[SCREEN_W * SCREEN_H];
@@ -4026,8 +5635,10 @@ static void billboard_copy(struct pen *p, const struct sheet *sh, int32_t s,
     m.s.w = SCREEN_W;
     m.xl = ones;
     copy_rect(&m, sh->px, sh->w, sh->h, cell_x(sh, s), cell_y(sh, s),
-              cw * 8, ch * 8, x, y, w, h, flip, 0);
-    p->cost = m.cost + (uint32_t)((x1 - x0) * (y1 - y0)) / 16;
+              cw * 8, ch * 8, x, y, w, h, FLIP_X(flip), FLIP_Y(flip));
+    /* the table and the second copy: about 141 units a fogged billboard,
+     * timed on the 5G */
+    p->cost = m.cost + (uint32_t)((x1 - x0) * (y1 - y0)) / 16 + 141;
     for (int32_t r = y0; r < y1; r++) {
         const uint8_t *b = bayer[r & 3], *mr = mask + r * SCREEN_W;
         uint8_t *dr = p->s.px + r * p->s.w;
@@ -4045,11 +5656,11 @@ void core_draw_billboard(struct vm *vm, int32_t s, int32_t x, int32_t y,
     begin_view(vm, &p);
     p.ox = p.oy = 0;
     p.cost = COST_CALL / 2;
-    p.per16 = 0;                    /* copy_rect charges the area */
+    p.per256 = 0;                    /* copy_rect charges the area */
     const struct planeview *v = &vm->plane;
     struct sheet sheet;
     sheet_of(vm, &sheet);
-    int32_t fog = core_fog_level(v, depth);
+    int32_t fog = v->fog_billboards ? core_fog_level(v, depth) : 0;
     uint8_t fogc = p.d->dpal[v->fog_colour];
     if (!v->depth_set && !v->land_set) {
         billboard_copy(&p, &sheet, s, x, y, w, h, cw, ch, flip, fog, fogc);
@@ -4100,18 +5711,24 @@ void core_draw_sky(struct vm *vm, const uint8_t *px, int32_t w, int32_t h,
 {
     struct pen p;
     begin(vm, &p, 0, 0);
-    p.per16 = 0;
+    p.per256 = 0;
     const struct planeview *v = &vm->plane;
     const uint16_t *xl = p.xl;
     int32_t bottom = v->horizon - lift, top = bottom - h;
     int32_t y0 = top > p.cy0 ? top : p.cy0;
     int32_t y1 = bottom < p.cy1 ? bottom : p.cy1;
     uint32_t drawn = 0;
+    /* (x - SCREEN_W / 2) * fov / SCREEN_W, rounded toward zero as a 64-bit
+     * divide would, without one a column: with fov = q * SCREEN_W + r it is
+     * k * q + k * r / SCREEN_W, and k * r is small */
+    int64_t fov_q = v->fov / SCREEN_W;
+    int32_t fov_r = (int32_t)(v->fov % SCREEN_W);
     if (y0 < y1)
         for (int32_t x = p.cx0; x < p.cx1; x++) {
             /* turns round from the angle, 16.16: east is the image's left */
-            int64_t turn = -(int64_t)v->angle +
-                           (int64_t)(x - SCREEN_W / 2) * v->fov / SCREEN_W;
+            int32_t k = x - SCREEN_W / 2;
+            int64_t turn = -(int64_t)v->angle + k * fov_q +
+                           k * fov_r / SCREEN_W;
             int32_t u = (int32_t)(((turn & 0xffff) * w) >> 16);
             const uint8_t *src = px + (y0 - top) * w + u;
             uint8_t *dst = p.s.px + y0 * p.s.w + x;
@@ -4128,7 +5745,9 @@ void core_draw_sky(struct vm *vm, const uint8_t *px, int32_t w, int32_t h,
         row_touched(&p, y1 - 1);
     }
     p.count += drawn;
-    p.cost += (uint32_t)((p.cx1 - p.cx0) * (y1 > y0 ? y1 - y0 : 0)) / 4;
+    /* timed on the 5G: about 12 units per 16 pixels of the area, the
+     * columns read down the image */
+    p.cost += (uint32_t)((p.cx1 - p.cx0) * (y1 > y0 ? y1 - y0 : 0)) * 12 / 16;
     finish(vm, &p);
 }
 
@@ -4165,6 +5784,28 @@ static int door_hit(const struct planeview *v, const struct wallspec *ws,
     return 1;
 }
 
+/* a wall column's texel that is see-through, beside the 256 colours */
+#define WALL_CLEAR 0x100
+
+#ifdef ARCADE_ASM
+void wall_column_arm(uint8_t *px, int32_t w, int32_t n, uint32_t ty,
+                     uint32_t ts, const uint8_t *const *tab);
+#endif
+
+/* n pixels down a wall's column from px, w apart, none see-through: row y's
+ * texel is ty's whole part, ty stepping by ts, and its colour from tab[y &
+ * 3], the four tables in the order of the rows from px */
+static void wall_column(uint8_t *px, int32_t w, int32_t n, uint32_t ty,
+                        uint32_t ts, const uint8_t *const *tab)
+{
+#ifdef ARCADE_ASM
+    wall_column_arm(px, w, n, ty, ts, tab);
+#else
+    for (int32_t y = 0; y < n; y++, ty += ts, px += w)
+        *px = tab[y & 3][(ty >> 16) & 7];
+#endif
+}
+
 /* door i of the list's openness, 16.16 (0 shut), or -1 when cell mx, my
  * is not a door */
 static int32_t door_open(const struct wallspec *ws, int32_t mx, int32_t my)
@@ -4190,7 +5831,7 @@ uint32_t core_draw_walls(struct vm *vm, const struct wallspec *ws)
 {
     struct pen p;
     begin_view(vm, &p);
-    p.per16 = 0;
+    p.per256 = 0;
     struct planeview *v = &vm->plane;
     const uint8_t *map = MEM(vm, vm->map), *flags = MEM(vm, vm->flags);
     const uint8_t *sheet = MEM(vm, vm->sheet);
@@ -4297,25 +5938,47 @@ uint32_t core_draw_walls(struct vm *vm, const struct wallspec *ws)
         const uint8_t *col = sheet + (m >> 4) * 8 * SHEET_W + (m & 15) * 8 + tx;
         const uint8_t *dark = side == 1 ? ws->dark : NULL;
         int32_t fog = core_fog_level(v, d);
-        uint8_t *px = p.s.px + y0 * w + x;
-        for (int32_t y = y0; y < y1; y++, ty += ts, px += w) {
-            uint8_t s = col[((ty >> 16) & 7) * SHEET_W];
+        /* the column's eight texels as drawn, translated and darkened
+         * here rather than at every pixel; WALL_CLEAR where see-through */
+        uint16_t base[8];
+        int clear = 0;
+        for (int32_t r = 0; r < 8; r++) {
+            uint8_t s = col[r * SHEET_W];
             uint32_t c = xl[s];
             if (c & XLAT_CLEAR)
-                continue;
-            if (fog && bayer[y & 3][x & 3] < fog)
-                *px = fogc;
+                clear = 1;
             else if (dark && !(xl[dark[s]] & XLAT_CLEAR))
-                *px = (uint8_t)xl[dark[s]];
-            else
-                *px = (uint8_t)c;
+                c = xl[dark[s]];
+            base[r] = (uint16_t)(c & XLAT_CLEAR ? WALL_CLEAR : (uint8_t)c);
         }
+        uint8_t *px = p.s.px + y0 * w + x;
+        if (!clear) {
+            /* a table for each row of the dither, the same four times
+             * where there is no fog */
+            uint8_t tab[4][8];
+            const uint8_t *rows[4];
+            for (int32_t k = 0; k < (fog ? 4 : 1); k++)
+                for (int32_t r = 0; r < 8; r++)
+                    tab[k][r] = fog && bayer[k][x & 3] < fog
+                                ? fogc : (uint8_t)base[r];
+            for (int32_t k = 0; k < 4; k++)
+                rows[k] = tab[fog ? (y0 + k) & 3 : 0];
+            wall_column(px, w, y1 - y0, ty, ts, rows);
+        } else
+            for (int32_t y = y0; y < y1; y++, ty += ts, px += w) {
+                uint32_t c = base[(ty >> 16) & 7];
+                if (c == WALL_CLEAR)
+                    continue;
+                *px = fog && bayer[y & 3][x & 3] < fog ? fogc : (uint8_t)c;
+            }
         drawn += (uint32_t)(y1 - y0);
         row_touched(&p, y0);
         row_touched(&p, y1 - 1);
     }
     v->depth_set = 1;
-    p.cost += steps * 2 + hit * 40 + drawn * PER16_FLOOR / 16;
+    /* measured on the ARM rig (drawprobe): the rays and each column's
+     * set-up, its divisions most of it; the pixels about 8 cycles each */
+    p.cost += (steps * 2 + hit * 40) * 4 / 3 + drawn * 3 / 16;
     finish(vm, &p);
     return hit;
 }
@@ -4329,65 +5992,240 @@ uint32_t core_draw_walls(struct vm *vm, const struct wallspec *ws)
  * dithered, so a torch fades rather than banding. */
 
 #define LIGHT_LEVELS 8
+/* the most lights one call takes */
+#define LIGHT_MAX 4096
+/* a reach, in sixteenths, from which a light's middle is filled */
+#define LIGHT_SPLIT (32 * 16)
+
+/* measured on the ARM rig (drawprobe) and timed on the 5G, in units: a
+ * colour table; the shade tables, when the ramp's length changes; a row
+ * any light reaches, and each light's row; per 32 pixels stepped through
+ * by a light, and per 32 mapped through their levels over darkening; and
+ * per 16 of the clip, all darkened or mapped */
+#define LIGHT_TABLE 25
+#define LIGHT_SHADE 1200
+#define LIGHT_ROW 16
+#define LIGHT_LAMP 16
+#define LIGHT_STEP32 11
+#define LIGHT_MAP32 3
+#define LIGHT_DARK16 4
+/* each light given, and each within the clip's rows: its set-up, a 64-bit
+ * division among it; and each row a light's edges are walked down */
+#define LIGHT_EACH 2
+#define LIGHT_SET 12
+#define LIGHT_WALK 1
+
+/* the units for the pixels stepped through and mapped, the rows lit and
+ * the lights' rows */
+static uint32_t light_units(uint32_t step, uint32_t map, uint32_t rows,
+                            uint32_t lamprows)
+{
+    return (step * LIGHT_STEP32 + map * LIGHT_MAP32) / 32 + rows * LIGHT_ROW +
+           lamprows * LIGHT_LAMP;
+}
 
 #ifdef ARCADE_ASM
 void light_map_arm(uint8_t *px, const uint8_t *lit, int32_t n,
                    const uint8_t *lut, uint32_t levels);
-void light_row_arm(uint8_t *row, int32_t xa, int32_t xb, uint32_t dd,
-                   int32_t step, uint32_t inv, uint32_t bay,
-                   const uint16_t *fall, uint32_t levels);
+void light_dark_arm(uint8_t *px, int32_t n, const uint8_t *lut);
+void light_span_arm(uint8_t *row, int32_t n, uint32_t q, uint32_t dq,
+                    uint32_t inv, const uint8_t *const *tab);
 #endif
 
-#ifndef ARCADE_ASM
-/* One row of a light, xa to xb: each pixel's level from its squared
- * distance dd (stepping by step, which grows by 512 a pixel), its 256ths
- * of the reach's square (dd * inv over 2^32) through fall, with the row's
- * dither added; the highest of the lights kept. Its own function, so the
- * loop's few values stay in registers. */
-static void __attribute__((noinline))
-light_row(uint8_t *row, int32_t xa, int32_t xb, uint32_t dd,
-                      int32_t step, uint32_t inv, const uint8_t *bay,
-                      const uint16_t *fall, uint32_t levels)
+/* The level at a squared distance of i/256 of the reach's square, for the
+ * dither b: 2 * levels * (1 - its root) in sixteenths, plus b, over 16 --
+ * full light within half the reach, dithered steps across the outer half.
+ * Kept for shade_levels levels, beside the tables rather than in the
+ * game's state, which a resumed game brings back without them. */
+static uint8_t shade[16][260];
+static uint32_t shade_levels;
+
+static void light_shade(uint32_t levels)
 {
-    for (int32_t x = xa; x < xb; x++) {
-        uint32_t idx = (uint32_t)(((uint64_t)dd * inv) >> 32);
-        if (idx <= 256) {
-            uint32_t k = (uint32_t)(fall[idx] + bay[x & 3]) >> 4;
-            if (k > levels)
-                k = levels;
-            if (k > row[x])
-                row[x] = (uint8_t)k;
+    int32_t root = 0;
+    for (int32_t i = 0; i <= 256; i++) {
+        /* the root of i * 256, walked up as i grows */
+        while ((root + 1) * (root + 1) <= i * 256)
+            root++;
+        int32_t f = (int32_t)levels * (256 - root) / 8;
+        /* (f + b) / 16 is f / 16 until b reaches 16 less f's remainder,
+         * then one more; at most levels */
+        int32_t k = f >> 4, split = 16 - (f & 15);
+        uint8_t lo = (uint8_t)(k > (int32_t)levels ? (int32_t)levels : k);
+        uint8_t up = (uint8_t)(k + 1 > (int32_t)levels ? (int32_t)levels
+                                                       : k + 1);
+        uint8_t *s = &shade[0][i], *mid = &shade[split][i];
+        uint8_t *end = &shade[15][i];
+        for (; s < mid; s += sizeof(shade[0]))
+            *s = lo;
+        for (; s <= end; s += sizeof(shade[0]))
+            *s = up;
+    }
+}
+
+/* n pixels of a light's row from row: each pixel's level from q, its
+ * squared distance in 256ths of the reach's square with 23 bits of
+ * fraction, through its dither's shade table, tab[0] the first pixel's;
+ * the highest of the lights kept. q steps by dq, which grows by inv. */
+static void light_span(uint8_t *row, int32_t n, uint32_t q, uint32_t dq,
+                       uint32_t inv, const uint8_t *const *tab)
+{
+#ifdef ARCADE_ASM
+    light_span_arm(row, n, q, dq, inv, tab);
+#else
+    for (int32_t x = 0; x < n; x++) {
+        uint8_t k = tab[x & 3][q >> 23];
+        if (k > row[x])
+            row[x] = k;
+        q += dq;
+        dq += inv;
+    }
+#endif
+}
+
+/* pixels xa to xb of the row dy2 (sixteenths squared) from a light at lx:
+ * q and dq at xa, with inv 2^40 over the reach's square; row8 the row's
+ * shade tables by x & 3, twice over. dq, the step to the next pixel's
+ * squared distance (32 * (dx + 8)) times inv over 2^9, is (dx + 8) * inv
+ * over 16, from one 32 by 32 multiply. q and dq are both rounded up, so q
+ * stepped is never below the true value: at a light's very centre it
+ * would wrap below zero and index past the shade table. */
+static void light_run(uint8_t *row, int32_t xa, int32_t xb, int32_t lx,
+                      int32_t dy2, uint32_t inv, const uint8_t *const *row8)
+{
+    if (xa >= xb)
+        return;
+    int32_t dx = xa * 16 + 8 - lx;
+    uint32_t dd = (uint32_t)(dx * dx + dy2);
+    int32_t s = dx + 8;
+    uint64_t m = (uint64_t)(uint32_t)(s < 0 ? -s : s) * inv;
+    uint32_t dq = s < 0 ? -(uint32_t)(m >> 4) : (uint32_t)((m + 15) >> 4);
+    light_span(row + xa, xb - xa,
+               (uint32_t)(((uint64_t)dd * inv + 511) >> 9), dq, inv,
+               row8 + (xa & 3));
+}
+
+/* lit zeroed from a to b, rounded out to whole words: a few in place,
+ * more by memset */
+static inline __attribute__((always_inline))
+void light_zero(uint8_t *lit, int32_t a, int32_t b)
+{
+    uint32_t *z = (uint32_t *)(void *)(lit + (a & ~3));
+    uint32_t *e = (uint32_t *)(void *)(lit + ((b + 3) & ~3));
+    if (e - z > 8)
+        memset(z, 0, (size_t)((uint8_t *)e - (uint8_t *)z));
+    else
+        while (z < e)
+            *z++ = 0;
+}
+
+/* n pixels through the darkest table */
+static void light_dark(uint8_t *px, int32_t n, const uint8_t *dark)
+{
+    int32_t x = 0;
+#ifdef ARCADE_ASM
+    for (; x < n && ((uintptr_t)(px + x) & 3); x++)
+        px[x] = dark[px[x]];
+    if (n - x >= 4) {
+        light_dark_arm(px + x, (n - x) & ~3, dark);
+        x += (n - x) & ~3;
+    }
+#endif
+    for (; x < n; x++)
+        px[x] = dark[px[x]];
+}
+
+/* n pixels each through its level's table; the brightest are left be.
+ * Four at a time where the levels are all dark or all bright. */
+static void light_map(uint8_t *px, const uint8_t *row, int32_t n,
+                      const uint8_t (*lut)[256], uint32_t levels)
+{
+    int32_t x = 0;
+#ifdef ARCADE_ASM
+    if (!(((uintptr_t)px | (uintptr_t)row) & 3)) {
+        x = n & ~3;
+        light_map_arm(px, row, x, lut[0], levels);
+    }
+#endif
+    for (; x + 4 <= n; x += 4) {
+        uint32_t l0 = row[x], l1 = row[x + 1], l2 = row[x + 2];
+        uint32_t l3 = row[x + 3];
+        /* all four darkest; else all four at the top level (an AND keeps
+         * every bit of levels only where each is levels), left alone */
+        if ((l0 | l1 | l2 | l3) == 0) {
+            px[x] = lut[0][px[x]];
+            px[x + 1] = lut[0][px[x + 1]];
+            px[x + 2] = lut[0][px[x + 2]];
+            px[x + 3] = lut[0][px[x + 3]];
+        } else if ((l0 & l1 & l2 & l3) != levels) {
+            for (int k = 0; k < 4; k++)
+                if (row[x + k] < levels)
+                    px[x + k] = lut[row[x + k]][px[x + k]];
         }
-        dd += (uint32_t)step;
-        step += 512;
     }
+    for (; x < n; x++)
+        if (row[x] < levels)
+            px[x] = lut[row[x]][px[x]];
 }
-#endif
 
-/* The square root of v, rounded down */
-static uint32_t root32(uint32_t v)
+/* A light as the rows are drawn: its centre in sixteenths of a pixel, so a
+ * squared distance fits 32 bits and steps along a row by adding; its
+ * reach's square, a quarter of that, and 2^40 over it; its rows; the
+ * pixels of the last row whose centres are within the reach (l to r) and
+ * within half of it (il to ir), end exclusive; and the next light to start
+ * on its first row, plus one, or 0 */
+struct lamp
 {
-    uint32_t r = 0, bit = 1u << 30;
-    while (bit > v)
-        bit >>= 2;
-    while (bit) {
-        if (v >= r + bit) {
-            v -= r + bit;
-            r = (r >> 1) + bit;
-        } else
-            r >>= 1;
-        bit >>= 2;
-    }
-    return r;
+    int32_t lx, ly, r2, quarter, y0, y1;
+    uint32_t inv;
+    int32_t l, r, il, ir;
+    int32_t next;
+};
+
+/* whether pixel x's centre, dy2 (sixteenths squared) above or below the
+ * light's, is within lim of it */
+static inline __attribute__((always_inline))
+int lamp_in(const struct lamp *m, int32_t x, int32_t dy2, int32_t lim)
+{
+    int32_t dx = x * 16 + 8 - m->lx;
+    return dx * dx + dy2 <= lim;
 }
 
-static const uint8_t bayer4[16] = { 0, 8, 2, 10, 12, 4, 14, 6,
-                                    3, 11, 1, 9, 15, 7, 13, 5 };
+/* The pixels of a row within lim of the light: l to r, moved from the
+ * last row's a pixel at a time, as a row's edges move little from the
+ * last's. The pixel holding the centre is the nearest, so none is within
+ * if it is not. Returns 0 for none. */
+static int lamp_row(const struct lamp *m, int32_t dy2, int32_t lim,
+                    int32_t *l, int32_t *r)
+{
+    int32_t c = m->lx >> 4;
+    if (!lamp_in(m, c, dy2, lim))
+        return 0;
+    int32_t a = *l > c ? c : *l, b = *r - 1 < c ? c : *r - 1;
+    if (lamp_in(m, a, dy2, lim))
+        while (lamp_in(m, a - 1, dy2, lim))
+            a--;
+    else
+        while (!lamp_in(m, a, dy2, lim))
+            a++;
+    if (lamp_in(m, b, dy2, lim))
+        while (lamp_in(m, b + 1, dy2, lim))
+            b++;
+    else
+        while (!lamp_in(m, b, dy2, lim))
+            b--;
+    *l = a;
+    *r = b + 1;
+    return 1;
+}
 
 /* light.draw(x, y, r, n, ramp): n lights, each centre (x, y) and reach r,
  * as numbers or arrays; ramp a list of 1 to 8 colour tables, each an
  * array or Uint8Array taking a colour to its darker one (colours past its
- * end kept). Over the target, within the clip, after the scene is drawn */
+ * end kept). Over the target, within the clip, after the scene is drawn.
+ * A row at a time: its lights' levels into one row of levels, then the
+ * pixels they reach through their levels' tables and the rest through the
+ * darkest. */
 NATIVE(light_draw)
 {
     (void)argc; (void)out;
@@ -4403,20 +6241,32 @@ NATIVE(light_draw)
     int32_t n = floor_int(a[3]);
     if (n < 0)
         n = 0;
+    if (n > LIGHT_MAX)
+        return vm_fail(vm, "light.draw() takes at most 4096 lights", "", "");
     if ((uint32_t)n > cx.len || (uint32_t)n > cy.len || (uint32_t)n > cr.len)
         return vm_fail(vm, "light.draw() has fewer x, y or r than lights", "",
                        "");
     uint32_t levels = ARR(vm, a[4])->len;
+    /* the tables, each the colours as they are from cart[k] up: only those
+     * a cart's table covers are written each call */
     static uint8_t lut[LIGHT_LEVELS][256];
+    static uint16_t cart[LIGHT_LEVELS] = { 256, 256, 256, 256,
+                                           256, 256, 256, 256 };
     for (uint32_t k = 0; k < levels; k++) {
         struct column t;
         if (!column_of(vm, BUF(vm, ARR(vm, a[4])->buf)->v[k], &t) ||
             t.tag == T_INT)
             return vm_fail(vm, "light.draw()'s ramp holds colour tables: "
                            "arrays or Uint8Arrays", "", "");
-        for (int c = 0; c < 256; c++)
-            lut[k][c] = (uint8_t)((uint32_t)c < t.len
-                                  ? column_at(&t, (uint32_t)c, c) : c);
+        uint32_t m = t.len < 256 ? t.len : 256;
+        if (t.tag == T_U8)
+            memcpy(lut[k], t.p, m);
+        else
+            for (uint32_t c = 0; c < m; c++)
+                lut[k][c] = (uint8_t)column_at(&t, c, (int32_t)c);
+        for (uint32_t c = m; c < cart[k]; c++)
+            lut[k][c] = (uint8_t)c;
+        cart[k] = (uint16_t)m;
     }
     struct pen p;
     begin(vm, &p, 0, 0);
@@ -4425,115 +6275,147 @@ NATIVE(light_draw)
         finish(vm, &p);
         return 1;
     }
-    uint8_t *lit = scratch(vm, (uint32_t)(w * h));
-    if (!lit)
+    uint32_t cost = levels * LIGHT_TABLE;
+    if (shade_levels != levels) {
+        shade_levels = levels;
+        light_shade(levels);
+        cost += LIGHT_SHADE;
+    }
+    /* the lamps; those lit on the row, by number; the first to start on
+     * each row, plus one; and a row of levels indexed by x */
+    uint32_t lamps_at = (uint32_t)n * sizeof(struct lamp);
+    uint32_t lit_at = lamps_at + (uint32_t)(n + h) * 4;
+    uint8_t *mem = scratch(vm, lit_at + (uint32_t)p.cx1 + 4);
+    if (!mem)
         return 0;
     /* scratch may have collected: the surface is found again */
     begin(vm, &p, 0, 0);
-    memset(lit, 0, (size_t)(w * h));
-    /* the level, in sixteenths, at a squared distance of i/256 of the
-     * reach's square: 2 * levels * (1 - its root) -- full light within
-     * half the reach, the steps across the outer half */
-    static uint16_t fall[257];
-    static uint32_t fall_levels;
-    if (fall_levels != levels) {
-        fall_levels = levels;
-        for (int i = 0; i <= 256; i++) {
-            int32_t root = (int32_t)isqrt64((uint64_t)i * 256);
-            int32_t v = (int32_t)levels * (256 - root) / 8;
-            fall[i] = (uint16_t)(v > (int32_t)levels * 16
-                                 ? (int32_t)levels * 16 : v);
-        }
-    }
-    uint32_t measured = 0;
+    struct lamp *lamps = (struct lamp *)(void *)mem;
+    int32_t *on = (int32_t *)(void *)(mem + lamps_at);
+    int32_t *starts = on + n;
+    uint8_t *lit = mem + lit_at;
+    int32_t nl = 0, non = 0;
+    uint32_t reach = 0;
     for (int32_t i = 0; i < n; i++) {
-        /* in sixteenths of a pixel, so a squared distance fits 32 bits and
-         * steps along a row by adding */
-        int32_t lx = (column_fix(&cx, (uint32_t)i) >> 12) +
-                     (int32_t)(p.ox * 16);
-        int32_t ly = (column_fix(&cy, (uint32_t)i) >> 12) +
-                     (int32_t)(p.oy * 16);
+        struct lamp *m = &lamps[nl];
+        int64_t lx = column_fix(&cx, (uint32_t)i);
+        int64_t ly = column_fix(&cy, (uint32_t)i);
+        if (vm->d.cam_moved) {
+            turn_fix(&vm->d, &lx, &ly);
+            /* a light turned far off cannot reach the clip */
+            if (lx > (1 << 30) || lx < -(1 << 30) || ly > (1 << 30) ||
+                ly < -(1 << 30))
+                continue;
+        }
+        m->lx = (int32_t)(lx >> 12) + (int32_t)(p.ox * 16);
+        m->ly = (int32_t)(ly >> 12) + (int32_t)(p.oy * 16);
         int32_t r = column_fix(&cr, (uint32_t)i) >> 12;
         if (r < 17)
             continue;                   /* under a pixel */
         if (r > 16 * 512)
             r = 16 * 512;
-        uint32_t r2 = (uint32_t)(r * r);
-        /* a squared distance times inv, over 2^32: its 256ths of r2 */
-        uint32_t inv = (uint32_t)(((uint64_t)256 << 32) / r2);
-        int32_t y0 = (ly - r) >> 4, y1 = ((ly + r) >> 4) + 1;
-        if (y0 < p.cy0) y0 = p.cy0;
-        if (y1 > p.cy1) y1 = p.cy1;
-        for (int32_t y = y0; y < y1; y++) {
-            int32_t dy = y * 16 + 8 - ly;
-            int32_t rem = (int32_t)r2 - dy * dy;
-            if (rem <= 0)
+        m->r2 = r * r;
+        m->quarter = m->r2 >> 2;
+        m->inv = (uint32_t)(((uint64_t)256 << 32) / (uint32_t)m->r2);
+        m->y0 = (m->ly - r) >> 4;
+        m->y1 = ((m->ly + r) >> 4) + 1;
+        if (m->y0 < p.cy0) m->y0 = p.cy0;
+        if (m->y1 > p.cy1) m->y1 = p.cy1;
+        if (m->y0 >= m->y1)
+            continue;
+        m->l = m->il = m->r = m->ir = m->lx >> 4;
+        m->next = starts[m->y0 - p.cy0];
+        starts[m->y0 - p.cy0] = ++nl;
+        reach += (uint32_t)r >> 5;      /* its first row's edges walked out */
+    }
+    cost += (uint32_t)n * LIGHT_EACH + (uint32_t)nl * LIGHT_SET + reach;
+    /* the pixels stepped through and mapped, the rows lit and the
+     * lights' rows, since the last spend */
+    uint32_t step = 0, mapped = 0, rows = 0, lamprows = 0, walked = 0;
+    for (int32_t y = p.cy0; y < p.cy1; y++) {
+        /* the row's shade tables by x & 3, twice over, once a light
+         * reaches it */
+        const uint8_t *row8[8];
+        row8[0] = NULL;
+        /* lo to hi: the levels kept, whole words within the clip */
+        int32_t lo = p.cx1, hi = p.cx1;
+        for (int32_t i = starts[y - p.cy0]; i; i = lamps[i - 1].next)
+            on[non++] = i - 1;
+        for (int32_t k = 0; k < non; k++) {
+            struct lamp *m = &lamps[on[k]];
+            if (y >= m->y1) {
+                on[k--] = on[--non];
                 continue;
-            int32_t half = (int32_t)root32((uint32_t)rem);
-            int32_t xa = (lx - half) >> 4, xb = ((lx + half) >> 4) + 1;
-            if (xa < p.cx0) xa = p.cx0;
-            if (xb > p.cx1) xb = p.cx1;
+            }
+            int32_t dy = y * 16 + 8 - m->ly, dy2 = dy * dy;
+            /* its edges walked whether or not the row reaches the clip */
+            walked++;
+            if (!lamp_row(m, dy2, m->r2, &m->l, &m->r))
+                continue;
+            int32_t xa = m->l < p.cx0 ? p.cx0 : m->l;
+            int32_t xb = m->r > p.cx1 ? p.cx1 : m->r;
             if (xa >= xb)
                 continue;
-            int32_t dx = xa * 16 + 8 - lx;
-            uint32_t dd = (uint32_t)(dx * dx + dy * dy);
-            int32_t step = 32 * dx + 256;
-#ifdef ARCADE_ASM
-            /* the row's dither steps a byte each, xa's lowest */
-            const uint8_t *b4 = bayer4 + (y & 3) * 4;
-            uint32_t bay = 0;
-            for (int k = 3; k >= 0; k--)
-                bay = bay << 8 | b4[(xa + k) & 3];
-            light_row_arm(lit + (y - p.cy0) * w - p.cx0, xa, xb, dd, step,
-                          inv, bay, fall, levels);
-#else
-            light_row(lit + (y - p.cy0) * w - p.cx0, xa, xb, dd, step, inv,
-                      bayer4 + (y & 3) * 4, fall, levels);
-#endif
-            measured += (uint32_t)(xb - xa);
-        }
-        if (measured > 65536) {
-            if (!vm_spend(vm, measured / 16))
-                return 0;
-            measured = 0;
-        }
-    }
-    /* each pixel through its level's table; the brightest are left be.
-     * Four at a time where the levels are all dark or all bright. */
-    const uint8_t *dark = lut[0];
-    for (int32_t y = p.cy0; y < p.cy1; y++) {
-        uint8_t *px = p.s.px + y * p.s.w + p.cx0;
-        const uint8_t *row = lit + (y - p.cy0) * w;
-        int32_t x = 0;
-#ifdef ARCADE_ASM
-        if (!(((uintptr_t)px | (uintptr_t)row) & 3)) {
-            x = w & ~3;
-            light_map_arm(px, row, x, lut[0], levels);
-        }
-#endif
-        for (; x + 4 <= w; x += 4) {
-            uint32_t l0 = row[x], l1 = row[x + 1], l2 = row[x + 2];
-            uint32_t l3 = row[x + 3];
-            /* all at the top level: an AND keeps every bit of levels
-             * only where each is levels */
-            if ((l0 | l1 | l2 | l3) == 0) {
-                px[x] = dark[px[x]];
-                px[x + 1] = dark[px[x + 1]];
-                px[x + 2] = dark[px[x + 2]];
-                px[x + 3] = dark[px[x + 3]];
-            } else if ((l0 & l1 & l2 & l3) != levels) {
-                for (int k = 0; k < 4; k++)
-                    if (row[x + k] < levels)
-                        px[x + k] = lut[row[x + k]][px[x + k]];
+            lamprows++;
+            if (!row8[0])
+                for (int j = 0; j < 8; j++)
+                    row8[j] = shade[bayer[y & 3][j & 3]];
+            /* within half the reach, full light: filled rather than
+             * stepped through where that saves, a reach of 32 or more */
+            int32_t ia = xb, ib = xb;
+            if (m->r2 >= LIGHT_SPLIT * LIGHT_SPLIT &&
+                lamp_row(m, dy2, m->quarter, &m->il, &m->ir)) {
+                ia = m->il < xa ? xa : m->il;
+                ib = m->ir > xb ? xb : m->ir;
+                if (ia >= ib)
+                    ia = ib = xb;
             }
+            int32_t wa = xa & ~3, wb = (xb + 3) & ~3;
+            if (wa < p.cx0) wa = p.cx0;
+            if (wb > p.cx1) wb = p.cx1;
+            if (lo >= hi) {
+                light_zero(lit, wa, wb);
+                lo = wa, hi = wb;
+            } else {
+                if (wa < lo) {
+                    light_zero(lit, wa, lo);
+                    lo = wa;
+                }
+                if (wb > hi) {
+                    light_zero(lit, hi, wb);
+                    hi = wb;
+                }
+            }
+            light_run(lit, xa, ia, m->lx, dy2, m->inv, row8);
+            if (ia < ib) {
+                memset(lit + ia, (int)levels, (size_t)(ib - ia));
+                light_run(lit, ib, xb, m->lx, dy2, m->inv, row8);
+            }
+            step += (uint32_t)(xb - xa - (ib - ia));
         }
-        for (; x < w; x++)
-            if (row[x] < levels)
-                px[x] = lut[row[x]][px[x]];
+        uint8_t *px = p.s.px + y * p.s.w;
+        if (lo >= hi)
+            light_dark(px + p.cx0, w, lut[0]);
+        else {
+            light_dark(px + p.cx0, lo - p.cx0, lut[0]);
+            light_map(px + lo, lit + lo, hi - lo,
+                      (const uint8_t (*)[256])lut, levels);
+            light_dark(px + hi, p.cx1 - hi, lut[0]);
+            mapped += (uint32_t)(hi - lo);
+            rows++;
+        }
         row_touched(&p, y);
+        if (step + mapped + walked * 32 > 65536) {
+            if (!vm_spend(vm, light_units(step, mapped, rows, lamprows) +
+                              walked * LIGHT_WALK))
+                return 0;
+            step = mapped = rows = lamprows = walked = 0;
+        }
     }
     p.count = (uint32_t)(w * h);
-    p.cost += measured / 16;
+    p.per256 = LIGHT_DARK16 * 16;
+    p.cost += cost + light_units(step, mapped, rows, lamprows) +
+              walked * LIGHT_WALK;
     finish(vm, &p);
     return 1;
 }

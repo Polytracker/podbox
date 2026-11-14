@@ -162,7 +162,7 @@ enum table {
     TABLE_FEATURED_TRACKS,
     TABLE_BOOK_RESUME,
     TABLE_BOOK_SHELF,
-    TABLE_MUSIC_QUIZ,
+    TABLE_MUSIC_QUIZ,           /* the Quiz row, never drawn */
     TABLE_PLAY_UNPLAYED,
     TABLE_SHUFFLE_ALBUMS,
     TABLE_LISTEN_STATS,
@@ -220,6 +220,7 @@ static bool episodes_finished_available(void);
 static bool episodes_not_started_available(void);
 static bool episodes_in_progress_available(void);
 static bool episodes_all_available(void);
+static bool never_available(void);
 
 /* A podcast episode's state, and every episode, as the Podcasts menu lists
  * them */
@@ -253,7 +254,10 @@ static const struct builtin_row {
       TABLE_ALBUM_CHARTS, ARTIST_CHART_FORGOTTEN,       NULL },
     { "featured_artists", LANG_FEATURED_ARTISTS, TABLE_FEATURED_ARTISTS, 0,
       featured_artists_available },
-    { "quiz", LANG_QUIZ, TABLE_MUSIC_QUIZ, 0, NULL },
+    /* The retired Music Quiz's row, never drawn: tagnavi.config still names
+     * it, and the rows after it keep their saved numbers only while it is
+     * a built-in row */
+    { "quiz", LANG_QUIZ, TABLE_MUSIC_QUIZ, 0, never_available },
     /* The Audiobooks shelves (book_shelf.c), the list in the param */
     { "book_finished", LANG_BOOK_SHELF_ROW_FINISHED, TABLE_BOOK_SHELF,
       BOOK_SHELF_FINISHED, shelf_finished_available },
@@ -289,6 +293,11 @@ static const struct builtin_row {
 static bool featured_artists_available(void)
 {
     return global_settings.featured_artists && db_featured_count() > 0;
+}
+
+static bool never_available(void)
+{
+    return false;
 }
 
 /* A shelf's row, unless the shelf is empty. Kept where the books cannot be
@@ -4229,6 +4238,7 @@ static int loaded_row_for_label(struct browser_context *c, int rows,
 static long pending_album_seek = -1;
 static long pending_album_artist_seek = -1;
 static char pending_album_title[MENUENTRY_MAX_NAME];
+static bool pending_album_select_playing = false;
 
 /* Arms a direct jump straight from the root into a specific album's own
  * track list -- skipping the intermediate "Album" grouping listing (all
@@ -4250,6 +4260,7 @@ static char pending_album_title[MENUENTRY_MAX_NAME];
 void browser_db_enter_album_tracks_on_next_load(long album_seek,
                                              const char *album_title)
 {
+    pending_album_select_playing = false;
     pending_album_seek = album_seek;
     pending_album_artist_seek = -1;
     browse_picked_by_name = true;
@@ -4266,6 +4277,52 @@ void browser_db_enter_artist_album_tracks_on_next_load(long album_seek,
 {
     browser_db_enter_album_tracks_on_next_load(album_seek, album_title);
     pending_album_artist_seek = albumartist_seek;
+}
+
+void browser_db_select_playing_on_next_album_load(void)
+{
+    pending_album_select_playing = true;
+}
+
+/* Set by browser_db_walk_to_album_on_next_load(); consumed on the next fresh
+ * root load. A walk_root_tag of -1 means none armed. */
+static int walk_root_tag = -1;
+static int walk_track = -1;
+static long walk_album_seek = -1;
+static long walk_artist_seek = -1;
+static char walk_album_title[MENUENTRY_MAX_NAME];
+
+void browser_db_walk_to_album_on_next_load(int root_tag, int track_idx,
+                                           long album_seek, long artist_seek,
+                                           const char *album_title)
+{
+    walk_root_tag = root_tag;
+    walk_track = track_idx;
+    walk_album_seek = album_seek;
+    walk_artist_seek = artist_seek;
+    strlcpy(walk_album_title, album_title ? album_title : "",
+            sizeof(walk_album_title));
+}
+
+bool browser_db_walk_pending(void)
+{
+    return walk_root_tag != -1;
+}
+
+void browser_db_cancel_walk(void)
+{
+    walk_root_tag = -1;
+}
+
+/* Set where the walk opened the album on its own instead */
+static bool walk_fell_back;
+
+bool browser_db_take_walk_fallback(void)
+{
+    bool fell_back = walk_fell_back;
+
+    walk_fell_back = false;
+    return fell_back;
 }
 
 /* Set by browser_db_enter_artist_albums_on_next_load(); consumed on the next fresh
@@ -4692,6 +4749,74 @@ static bool enter_row_value(struct browser_context *c, int idx, long seek)
     return true;
 }
 
+/* Puts the cursor on the playing track, where the list has it */
+static void select_playing_row(struct browser_context *c, int rows)
+{
+    for (int i = 0; i < rows; i++)
+    {
+        if (browser_db_entry_is_playing(c, i))
+        {
+            c->selected_item = i;
+            return;
+        }
+    }
+}
+
+/* The row of a loaded list whose value is 'seek', or -1. The head rows are
+ * passed over: a grouping's seek is into another tag's file. */
+static int loaded_row_for_seek(struct browser_context *c, int rows, long seek)
+{
+    for (int i = MAX(c->special_entry_count, head_rows); i < rows; i++)
+    {
+        struct tagentry *e = browser_db_get_entry(c, i);
+
+        if (e && e->newtable == TABLE_NAVIBROWSE && e->extraseek == seek)
+            return i;
+    }
+    return -1;
+}
+
+/* Enters a row as Select does, so BACK returns to it */
+static int walk_into(struct browser_context *c, int row)
+{
+    c->selected_item = row;
+    browser_db_enter(c, true);
+    return browser_db_load(c);
+}
+
+/* The root's 'root_row', then at each level the row of track's own value,
+ * down to the tracks with that one selected. False, back at the root, where
+ * a level has no row for it: whole or not at all, never part of the way. */
+static bool walk_to_track(struct browser_context *c, int root_row, int track,
+                          int *rows)
+{
+    int depth;
+
+    *rows = walk_into(c, root_row);
+    for (depth = 0; depth < MAX_TAGS && c->currtable == TABLE_NAVIBROWSE;
+         depth++)
+    {
+        long seek;
+        int row;
+
+        if (browser_db_get_attr(c) == FILE_ATTR_AUDIO)
+        {
+            select_playing_row(c, *rows);
+            return true;
+        }
+        seek = tagcache_entry_seek(track,
+                                   csi->tagorder[shown_level(c->currextra)]);
+        row = seek < 0 ? -1 : loaded_row_for_seek(c, *rows, seek);
+        if (row < 0)
+            break;
+        *rows = walk_into(c, row);
+    }
+
+    while (c->dirlevel > 0)
+        browser_db_exit(c, false);
+    return false;
+}
+
 int browser_db_load(struct browser_context* c)
 {
     logf( "%s", __func__);
@@ -4789,6 +4914,24 @@ int browser_db_load(struct browser_context* c)
          * the root menu rather than a dead end, as the other two forms do. */
     }
 
+    if (walk_root_tag != -1 && table == TABLE_ROOT && c->dirlevel == 0)
+    {
+        int rows = load_root(c);
+        int row = loaded_row_for_tag(c, rows, walk_root_tag);
+
+        walk_root_tag = -1;
+        if (row >= 0 && walk_to_track(c, row, walk_track, &rows))
+            return rows;
+        /* That list hidden, or not leading to this track: the album on its
+         * own */
+        walk_fell_back = true;
+        browser_db_enter_artist_album_tracks_on_next_load(walk_album_seek,
+                                                          walk_artist_seek,
+                                                          walk_album_title);
+        browser_db_select_playing_on_next_album_load();
+        return browser_db_load(c);
+    }
+
     if (pending_root_shortcut_tag != -1 && table == TABLE_ROOT && c->dirlevel == 0)
     {
         int target_tag = pending_root_shortcut_tag;
@@ -4810,9 +4953,18 @@ int browser_db_load(struct browser_context* c)
             pending_album_seek = -1;
             pending_album_artist_seek = -1;
 
+            bool select_playing = pending_album_select_playing;
+            pending_album_select_playing = false;
+
             if (enter_album_tracks_directly(c, album_seek, artist_seek,
                                             album_title))
-                return browser_db_load(c);
+            {
+                int rows = browser_db_load(c);
+
+                if (select_playing)
+                    select_playing_row(c, rows);
+                return rows;
+            }
             /* Root has no plain tag_album row to anchor on (e.g. tagnavi
              * customized away from the shipped shape) -- fall through to
              * the root menu instead of a dead end. */
@@ -5256,6 +5408,13 @@ int browser_db_enter(struct browser_context* c, bool is_visible)
         int random_item = c->special_entry_count +
                           (rand() % (c->filesindir - c->special_entry_count));
         dptr = browser_db_get_entry(c, random_item);
+        /* NULL when the entry had to be read and the search was refused,
+         * as it is while the database is being committed */
+        if (!dptr)
+        {
+            splash(HZ, ID2P(LANG_TAGCACHE_BUSY));
+            return 0;
+        }
         seek = dptr->extraseek;
         /* On a track list the chosen row plays rather than descending, and
          * browser_db_play_folder() reads its start position from
@@ -5290,8 +5449,6 @@ int browser_db_enter(struct browser_context* c, bool is_visible)
         book_shelf_arm(seek);
         return GO_TO_BOOK_SHELF;
     }
-    if (newextra == TABLE_MUSIC_QUIZ)
-        return GO_TO_MUSIC_QUIZ;
     if (newextra == TABLE_LISTEN_STATS)
     {
         listen_progress_arm(seek);
@@ -5522,7 +5679,17 @@ int browser_db_enter(struct browser_context* c, bool is_visible)
                 c->dirlevel--;
                 /* about to create a new current playlist...
                  allow user to cancel the operation */
-                if (!warn_on_pl_erase())
+                char path[MAX_PATH];
+                enum pl_erase_answer answer;
+
+                if (browser_db_get_filename(c, path, sizeof(path)) >= 0)
+                    answer = warn_on_pl_erase_track(path);
+                else
+                    answer = warn_on_pl_erase() ? PL_ERASE_REPLACE
+                                                : PL_ERASE_CANCEL;
+                if (answer == PL_ERASE_PLAY_NOW)
+                    rc = 2;
+                if (answer != PL_ERASE_REPLACE)
                     break;
                 if (browser_db_play_folder(c) >= 0)
                     rc = 2;
@@ -5787,7 +5954,17 @@ static bool insert_all_playlist(struct browser_context *c,
             }
         }
 
-        if (!tagcache_retrieve(&tcs, browser_db_get_entry(c, i)->extraseek, tcs.type, buf, sizeof buf))
+        struct tagentry *entry = browser_db_get_entry(c, i);
+
+        /* NULL when the entry had to be read and the search was refused,
+         * as it is once a database commit has started */
+        if (!entry)
+        {
+            exit_loop_now = true;
+            break;
+        }
+
+        if (!tagcache_retrieve(&tcs, entry->extraseek, tcs.type, buf, sizeof buf))
             continue;
 
         if (playlist == NULL)
@@ -7070,6 +7247,23 @@ unsigned int browser_db_get_art_hash(struct browser_context* c, int item)
         && browser_db_get_track_dir(c, item, dir, sizeof(dir)))
         hash = art_cache_dir_hash(dir);
     return hash;
+}
+
+unsigned int browser_db_get_artist_cover_hash(struct browser_context* c,
+                                              int item)
+{
+    struct tagentry *entry;
+    struct tagcache_artist ar;
+    int tag;
+
+    if (item < c->special_entry_count
+        || !browser_db_is_artist_list(c)
+        || !(entry = browser_db_get_entry(c, item)))
+        return 0;
+    tag = csi->tagorder[shown_level(c->currextra)];
+    if (!is_artist_tag(tag) || !artist_by_name(tag, entry->extraseek, &ar))
+        return 0;
+    return ar.cover_hash;
 }
 
 /* ---- scoping a search to the selected row ------------------------------- */

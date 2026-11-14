@@ -27,6 +27,9 @@
 #include "storage.h"
 #include "usb_core.h"       /* usb_core_host_wrote_storage */
 #include "iap-usb.h"        /* iap_on_power_off */
+#ifdef IPOD_ACCESSORY_PROTOCOL
+#include "iap.h"            /* iap_prepare_shutdown */
+#endif
 #include "ata_idle_notify.h"
 #include "dircache.h"
 #include "sound.h"
@@ -42,6 +45,7 @@
 #include "playlist/playlist.h"
 #include "database/tagcache.h"
 #include "screens/system/usb_screen.h"
+#include "games/arcade/shell.h"   /* shell_power_off */
 #include "metadata/book_resume.h"
 #include "screens/playback/wps.h"      /* pause_action, unpause_action */
 #include "screens/browse/browser.h"  /* browser_flush, browser_restore */
@@ -130,6 +134,7 @@ static bool clean_shutdown(enum shutdown_type sd_type,
         if (batt_safe) /* do not save on critical battery */
         {
             book_resume_save();
+            shell_power_off();
 
             /* audio_stop_recording == audio_stop for HWCODEC */
             audio_stop();
@@ -137,10 +142,18 @@ static bool clean_shutdown(enum shutdown_type sd_type,
             if (callback != NULL)
                 callback(parameter);
 
+#ifdef IPOD_ACCESSORY_PROTOCOL
+            /* the settings are written by system_flush() */
+            iap_prepare_shutdown(true);
+#endif
             system_flush();
         }
         else
         {
+#ifdef IPOD_ACCESSORY_PROTOCOL
+            /* the settings may still be written; the playlist is not */
+            iap_prepare_shutdown(false);
+#endif
             /* Queued play counts and ratings, and the buffered playback log,
              * are a few sector writes -- but only to a disk already spinning.
              * A spin-up on an empty battery can brown out mid-write and
@@ -265,6 +278,20 @@ void car_adapter_mode_init(void)
 }
 
 #ifdef BOOTFILE
+/* Starts the firmware on disk again. The bus is left first: with the USB
+ * Sound Card on, the host is still talking to us after an eject, and a
+ * controller that stops answering mid-session is what Windows reports as a
+ * device that has malfunctioned. A load that fails returns, and the bus is
+ * taken back if the cable is still in. */
+static void restart_firmware(void)
+{
+    audio_hard_stop();
+    usb_enable(false);
+    rolo_load(BOOTDIR "/" BOOTFILE);
+    if (usb_inserted())
+        usb_enable(true);
+}
+
 /* A computer rewrote the database (tools/database_pb). This run holds the old
  * one's track numbers, in the playlist and the buffered tracks, so start
  * again. Tried once: a failed load leaves the database closed to this run. */
@@ -275,8 +302,7 @@ static void restart_if_database_replaced(void)
     if (!tried && tagcache_changed_over_usb())
     {
         tried = true;
-        audio_hard_stop();
-        rolo_load(BOOTDIR "/" BOOTFILE);
+        restart_firmware();
     }
 }
 
@@ -498,10 +524,7 @@ void check_bootfile(bool do_rolo)
                     static const struct text_message message={ lines, 2 };
                     button_clear_queue(); /* Empty the keyboard buffer */
                     if(gui_syncyesno_run(&message, NULL, NULL) == YESNO_YES)
-                    {
-                        audio_hard_stop();
-                        rolo_load(BOOTDIR "/" BOOTFILE);
-                    }
+                        restart_firmware();
                 }
             }
             mtime = info.mtime;

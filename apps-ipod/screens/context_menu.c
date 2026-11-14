@@ -51,7 +51,6 @@
 #include "widgets/keyboard.h"
 #include "mp3data.h"
 #include "metadata.h"
-#include "games/spike/spike.h"
 #include "database/sound_mix.h"
 #include "database/sound_index.h"
 #include "screens/playback/sound_props.h"
@@ -348,18 +347,6 @@ MENUITEM_FUNCTION(reshuffle_item, 0, ID2P(LANG_SHUFFLE_PLAYLIST),
                   shuffle_playlist, NULL, Icon_NOICON);
 MENUITEM_FUNCTION(playing_time_item, 0, ID2P(LANG_PLAYING_TIME),
                   playing_time, NULL, Icon_NOICON);
-
-/* The game takes the playlist as it finds it, so it belongs on the WPS and
- * nowhere else: what it is played against is what is already playing. */
-static int spike_run(void)
-{
-    if (spike_screen())
-        context_menu_result = ONPLAY_MAINMENU;
-    return ONPLAY_OK;
-}
-
-MENUITEM_FUNCTION(spike_run_item, 0, ID2P(LANG_SPIKE_PLAY),
-                  spike_run, NULL, Icon_NOICON);
 
 /* Shuffle and Repeat as the Playback settings have them, at the top of
  * Now Playing's menu where they are wanted most */
@@ -1632,20 +1619,44 @@ static int go_to_callback(int action,
                           const struct menu_item_ex *this_item,
                           struct gui_synclist *this_list);
 
+static int leave(long go_to);
+
+/* The Music row Go to Album Via names, by its first tag */
+static const int album_via_tag[] = {
+    [ALBUM_VIA_ALBUM]       = tag_album,
+    [ALBUM_VIA_ALBUMARTIST] = tag_albumartist,
+    [ALBUM_VIA_ARTIST]      = tag_virt_canonicalartist,
+    [ALBUM_VIA_GENRE]       = tag_genre,
+};
+
 /* Both leave for the database browser, opened on the album or the album
- * artist, as a cover chosen in Album Covers does */
+ * artist, as a cover chosen in Album Covers does. From Now Playing, Go to
+ * Album Via can open the album under a Music list instead, for Left to climb
+ * it. */
 static int go_to_album(void)
 {
     struct tagcache_album album;
     char name[MAX_PATH];
+    int via = global_settings.go_to_album_via;
 
     if (!selected_track_album(&album))
         return 0;
     if (!tagcache_seek_string(tag_album, album.album_seek, name, sizeof(name)))
         name[0] = '\0';
 
+    if (selected_file.context == CONTEXT_WPS && via != ALBUM_VIA_DIRECT
+        && via < (int)ARRAYLEN(album_via_tag))
+    {
+        browser_db_walk_to_album_on_next_load(album_via_tag[via],
+                                              selected_track_idx(),
+                                              album.album_seek,
+                                              album.artist_seek, name);
+        context_menu_result = leave(GO_TO_DBBROWSER);
+        return 0;
+    }
     browser_db_enter_artist_album_tracks_on_next_load(album.album_seek,
                                                       album.artist_seek, name);
+    browser_db_select_playing_on_next_album_load();
     context_menu_result = ONPLAY_GO_TO_LIBRARY;
     return 0;
 }
@@ -2536,7 +2547,6 @@ MAKE_ONPLAYMENU_TITLED( wps_context_menu,
            &sleep_timer_item,
            &wps_speed_item,
            &sound_mix_item,
-           &spike_run_item,
            &wps_playlist_menu, &cat_playlist_menu,
            &theme_options_item,
            &wps_more_menu,
@@ -2670,6 +2680,54 @@ static int hotkey_previous_screen(void)
     return leave(GO_TO_PREVIOUS);
 }
 
+/* The now-playing menu's Go to Album, or for a podcast or book kept apart
+   from Music the Go to Podcast or Go to Audiobook it shows in its place. A
+   track the database does not hold goes back to the browser it was started
+   from. */
+static int hotkey_go_to_album(void)
+{
+    struct tagcache_album album;
+    int kind;
+
+    if (!selected_track_album(&album))
+        return leave(GO_TO_PREVIOUS_BROWSER);
+
+    context_menu_result = ONPLAY_OK;
+    kind = db_spoken_album_kind(&album);
+    if (!db_spoken_kind_apart(kind))
+        go_to_album();
+    else if (kind == 2)
+        go_to_podcast();
+    else
+        go_to_audiobook();
+    return context_menu_result;
+}
+
+/* Now Playing stops through its own exit, which saves a book's place and the
+   resume point */
+static int hotkey_stop(void)
+{
+    return ONPLAY_STOP;
+}
+
+/* The now-playing menu's Add to Playlist... submenu, for the playing track */
+static int hotkey_add_to_playlist(void)
+{
+    push_current_activity(ACTIVITY_CONTEXTMENU);
+    hiding_begin();
+    int ret = do_menu(&cat_playlist_menu, NULL, NULL, false);
+    hiding_end();
+    if (get_current_activity() == ACTIVITY_CONTEXTMENU)
+        pop_current_activity();
+    return ret == GO_TO_ROOT || ret == GO_TO_MAINMENU ? ONPLAY_MAINMENU
+                                                      : ONPLAY_RELOAD_DIR;
+}
+
+static int hotkey_main_menu(void)
+{
+    return leave(GO_TO_ROOT);
+}
+
 static int hotkey_music(void)
 {
     return leave(GO_TO_DBBROWSER);
@@ -2780,7 +2838,7 @@ static const struct hotkey_assignment hotkey_items[] = {
       .lang_id = LANG_SHOW_IN_FILES,
       .func = HOTKEY_FUNC(reveal, NULL),
       .return_code = ONPLAY_REVEAL_FILE,
-      .flags = HOTKEY_FLAG_WPS,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
       .icon = Icon_file_view_menu },
     { .action = HOTKEY_LYRICS,
       .lang_id = LANG_LYRICS,
@@ -2804,19 +2862,43 @@ static const struct hotkey_assignment hotkey_items[] = {
       .lang_id = LANG_BACK_PREVIOUS_SCREEN,
       .func = HOTKEY_FUNC(hotkey_previous_screen, NULL),
       .return_code = ONPLAY_FUNC_RETURN,
-      .flags = HOTKEY_FLAG_WPS,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
       .icon = Icon_NOICON },
     { .action = HOTKEY_PREVIOUS_BROWSER,
       .lang_id = LANG_PREVIOUS_BROWSER,
       .func = HOTKEY_FUNC(hotkey_previous_browser, NULL),
       .return_code = ONPLAY_FUNC_RETURN,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
+      .icon = Icon_NOICON },
+    { .action = HOTKEY_GO_TO_ALBUM,
+      .lang_id = LANG_GO_TO_ALBUM,
+      .func = HOTKEY_FUNC(hotkey_go_to_album, NULL),
+      .return_code = ONPLAY_FUNC_RETURN,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
+      .icon = Icon_NOICON },
+    { .action = HOTKEY_STOP,
+      .lang_id = LANG_STOP_PLAYBACK,
+      .func = HOTKEY_FUNC(hotkey_stop, NULL),
+      .return_code = ONPLAY_FUNC_RETURN,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
+      .icon = Icon_NOICON },
+    { .action = HOTKEY_ADD_TO_PLAYLIST,
+      .lang_id = LANG_ADD_TO_PL,
+      .func = HOTKEY_FUNC(hotkey_add_to_playlist, NULL),
+      .return_code = ONPLAY_FUNC_RETURN,
       .flags = HOTKEY_FLAG_WPS,
+      .icon = Icon_Playlist },
+    { .action = HOTKEY_MAIN_MENU,
+      .lang_id = LANG_MAIN_MENU,
+      .func = HOTKEY_FUNC(hotkey_main_menu, NULL),
+      .return_code = ONPLAY_FUNC_RETURN,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
       .icon = Icon_NOICON },
     { .action = HOTKEY_MUSIC,
       .lang_id = LANG_MUSIC_BROWSER,
       .func = HOTKEY_FUNC(hotkey_music, NULL),
       .return_code = ONPLAY_FUNC_RETURN,
-      .flags = HOTKEY_FLAG_WPS,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
       .icon = Icon_NOICON },
     { .action = HOTKEY_ALBUM_COVERS,
       .lang_id = LANG_ALBUM_COVERS,
@@ -2828,12 +2910,18 @@ static const struct hotkey_assignment hotkey_items[] = {
       .lang_id = LANG_DIR_BROWSER,
       .func = HOTKEY_FUNC(hotkey_files, NULL),
       .return_code = ONPLAY_FUNC_RETURN,
-      .flags = HOTKEY_FLAG_WPS,
+      .flags = HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
       .icon = Icon_file_view_menu },
     { .action = HOTKEY_THEME_OPTIONS,
       .lang_id = LANG_THEME_OPTIONS,
       .func = HOTKEY_FUNC(hotkey_theme_options, NULL),
       .return_code = ONPLAY_FUNC_RETURN,
+      .flags = HOTKEY_FLAG_WPS,
+      .icon = Icon_NOICON },
+    { .action = HOTKEY_THEME_TOGGLE,
+      .lang_id = LANG_THEME_TOGGLE,
+      .func = HOTKEY_FUNC(theme_toggle_press, NULL),
+      .return_code = ONPLAY_OK,
       .flags = HOTKEY_FLAG_WPS,
       .icon = Icon_NOICON },
     { .action = HOTKEY_CONTEXT_MENU,
@@ -2878,12 +2966,17 @@ static int execute_hotkey(int action)
     return return_code;      /* or return the associated value */
 }
 
+/* Theme Toggle's row, named for its option while it has one */
+static const char *toggle_label;
+
 static const char *hotkey_get_name(int selected_item, void *data,
                                    char *buffer, size_t buffer_len)
 {
     (void)buffer; (void)buffer_len;
     const struct hotkey_assignment **hk_menu =
                 (const struct hotkey_assignment**)data;
+    if (hk_menu[selected_item]->action == HOTKEY_THEME_TOGGLE && toggle_label)
+        return toggle_label;
     return ID2P(hk_menu[selected_item]->lang_id);
 }
 
@@ -2918,10 +3011,17 @@ static int hotkey_list(intptr_t flag, bool execute, int current_action,
     struct simplelist_info info;
     int selected = 0;
     int count = 0;
+
+    toggle_label = flag & HOTKEY_FLAG_WPS ? theme_toggle_label() : NULL;
     for (size_t i = 0; i < ARRAYLEN(hotkey_items); i++)
     {
         hk_menu[i] = NULL; /*clear all the hk_menu entries prior to setting them */
         if (hotkey_items[i].action == HOTKEY_OFF && !offer_off)
+            continue;
+        /* Offered only with an option to change, or to show a button that
+         * still has it */
+        if (hotkey_items[i].action == HOTKEY_THEME_TOGGLE && !toggle_label
+            && current_action != HOTKEY_THEME_TOGGLE)
             continue;
         if ((hotkey_items[i].flags & flag) == flag)
         {
@@ -3000,6 +3100,24 @@ int wps_select_do_setting(void *param)
                                   false);
 }
 
+/* Only the actions that leave Now Playing, as Menu does everywhere else */
+int wps_menu_do_setting(void *param)
+{
+    (void)param;
+    return hotkey_menu_do_setting(&global_settings.wps_menu_action,
+                                  HOTKEY_FLAG_WPS | HOTKEY_FLAG_LEAVES,
+                                  LANG_WPS_MENU_ACTION, false);
+}
+
+/* Not offered Off: a long press that did nothing would look like a fault */
+int wps_long_press_play_do_setting(void *param)
+{
+    (void)param;
+    return hotkey_menu_do_setting(&global_settings.wps_long_press_play_action,
+                                  HOTKEY_FLAG_WPS,
+                                  LANG_WPS_LONG_PRESS_PLAY_ACTION, false);
+}
+
 int wps_context_menu_do_setting(void *param)
 {
     (void)param;
@@ -3034,6 +3152,8 @@ static const struct
     { "database",           HOTKEY_MUSIC },
     { "coverflow",          HOTKEY_ALBUM_COVERS },
     { "queue",              HOTKEY_VIEW_PLAYLIST },
+    { "previous",           HOTKEY_PREVIOUS_SCREEN }, /* wps menu action */
+    { "root",               HOTKEY_MAIN_MENU },       /* wps menu action */
 };
 
 /* Whole names only: "Play Later" is also the start of "Play Later Shuffled" */
@@ -3206,9 +3326,8 @@ static const short now_playing_rows[] = {
     LANG_SHUFFLE, LANG_REPEAT, LANG_MENU_SET_RATING, LANG_GO_TO_ALBUM,
     LANG_GO_TO_ARTIST, LANG_GO_TO_PODCAST, LANG_GO_TO_AUDIOBOOK,
     LANG_GO_TO_AUTHOR, LANG_LYRICS, LANG_ARTIST_BIO, LANG_LINER_NOTES,
-    LANG_SLEEP_TIMER,
-    LANG_SOUND_MIX,
-    LANG_SPIKE_PLAY, LANG_CURRENT_PLAYLIST, LANG_ADD_TO_PL, LANG_THEME_OPTIONS,
+    LANG_SLEEP_TIMER, LANG_SOUND_MIX,
+    LANG_CURRENT_PLAYLIST, LANG_ADD_TO_PL, LANG_THEME_OPTIONS,
     LANG_SHOW_IN_FILES,
     LANG_VIEW_ALBUMART, LANG_WINDDOWN, LANG_BOOKMARK_MENU, LANG_BROWSE_CUESHEET,
     LANG_BROWSE_CHAPTERS, LANG_EQUALIZER, LANG_SOUND_SETTINGS, LANG_PLAYBACK,

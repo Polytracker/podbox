@@ -61,6 +61,7 @@
 #include "system/volume.h"
 #include "sound.h"
 #include "screens/context_menu.h"
+#include "screens/settings/exported_settings.h"  /* theme_toggle_press */
 #include "audio/ab_repeat.h"
 #include "audio/playback.h"
 #include "widgets/splash.h"
@@ -807,22 +808,78 @@ long gui_wps_show(void)
 
         switch(button)
         {
+            /* The buttons set from one list of actions */
             case ACTION_WPS_BROWSE:
+            case ACTION_WPS_MENU:
+            case ACTION_WPS_STOP:   /* a long press of Play */
             case ACTION_WPS_HOTKEY:
             {
                 int act = HK_CTX_GET(0, button == ACTION_WPS_BROWSE
                                         ? global_settings.wps_select_action
+                                      : button == ACTION_WPS_MENU
+                                        ? global_settings.wps_menu_action
+                                      : button == ACTION_WPS_STOP
+                                        ? global_settings.wps_long_press_play_action
                                         : global_settings.context_wps);
                 long go_to;
+                int ret;
 
+                /* The remote's long press repeats while held */
+                if (button == ACTION_WPS_STOP)
+                    action_wait_for_release();
+                /* Stop leaves through this screen's exit, which saves a
+                 * book's place and the resume point. Party mode refuses it,
+                 * as it refuses every way of stopping; Menu then leaves
+                 * with the music playing, so the screen can still be left. */
+                if (act == HOTKEY_STOP)
+                {
+                    if (!global_settings.party_mode)
+                        exit = true;
+                    else if (button == ACTION_WPS_MENU)
+                    {
+                        gwps_leave_wps(true);
+                        return GO_TO_PREVIOUS;
+                    }
+                    break;
+                }
+                /* Album Covers opens over this screen, so BACK returns here */
+                if (act == HOTKEY_ALBUM_COVERS && button == ACTION_WPS_STOP)
+                {
+                    theme_enabled = false;
+                    if (show_album_covers(&go_to))
+                        return go_to;
+                    restore = true;
+                    break;
+                }
+
+                /* Menu leaves even when a config has set it to an action
+                 * that stays */
+                if (button == ACTION_WPS_MENU
+                    && !(get_hotkey(act)->flags & HOTKEY_FLAG_LEAVES))
+                {
+                    gwps_leave_wps(true);
+                    return GO_TO_PREVIOUS;
+                }
                 if (act == HOTKEY_OFF)
                     break;
+                /* Changes the theme in place, so the screen stays */
+                if (act == HOTKEY_THEME_TOGGLE)
+                {
+                    theme_toggle_press();
+                    update = true;
+                    break;
+                }
                 /* A NOSBS action's screen owns the display and turns the
                  * theme off itself, so leave without re-enabling it */
                 theme_enabled = !(get_hotkey(act)->flags & HOTKEY_FLAG_NOSBS);
                 gwps_leave_wps(theme_enabled);
-                if (context_go_to(context_menu_wps_hotkey(state->id3->path,
-                                                          act), &go_to))
+                ret = context_menu_wps_hotkey(state->id3->path, act);
+                if (ret == ONPLAY_STOP)   /* Stop, from the actions' menu */
+                {
+                    if (!global_settings.party_mode)
+                        exit = true;
+                }
+                else if (context_go_to(ret, &go_to))
                 {
                     if (!theme_enabled)
                         gwps_leave_wps(true);   /* returning to the SBS */
@@ -987,13 +1044,6 @@ long gui_wps_show(void)
                 change_album(-1);
                 break;
             /* menu key functions */
-            case ACTION_WPS_MENU:
-                gwps_leave_wps(true);
-                return global_settings.wps_menu_action == WPS_MENU_PREVIOUS
-                       ? GO_TO_PREVIOUS : GO_TO_ROOT;
-                break;
-
-
             case ACTION_WPS_QUICKSCREEN:
             {
                 gwps_leave_wps(true);
@@ -1029,16 +1079,6 @@ long gui_wps_show(void)
                 }
                 break;
 
-                /* iPod Classic 6G custom: open Album covers instead of stopping */
-            case ACTION_WPS_STOP:
-                {
-                    long go_to;
-                    theme_enabled = false;
-                    if (show_album_covers(&go_to))
-                        return go_to;
-                    restore = true;
-                }
-                break;
 
             /* Bound only by a keymap file of the user's own */
             case ACTION_WPS_LIST_BOOKMARKS:

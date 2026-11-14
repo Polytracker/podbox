@@ -1348,8 +1348,8 @@ static void initialize_slide_cache(void)
         ind_ = next_; \
         next_ = pf_sldcache.cache[ind_].next; \
         i_++; \
-    } while (next_ != pf_sldcache.used && (cond) && i_ < SLIDE_CACHE_SIZE); \
-    if (i_ >= SLIDE_CACHE_SIZE) \
+    } while (next_ != pf_sldcache.used && (cond) && i_ <= SLIDE_CACHE_SIZE); \
+    if (i_ > SLIDE_CACHE_SIZE) \
     /* TODO: Not supposed to happen */ \
         ind_ = -1; \
     ind_; \
@@ -1363,8 +1363,8 @@ static void initialize_slide_cache(void)
         ind_ = next_; \
         next_ = pf_sldcache.cache[ind_].prev; \
         i_++; \
-    } while (ind_ != pf_sldcache.used && (cond) && i_ < SLIDE_CACHE_SIZE); \
-    if (i_ >= SLIDE_CACHE_SIZE) \
+    } while (ind_ != pf_sldcache.used && (cond) && i_ <= SLIDE_CACHE_SIZE); \
+    if (i_ > SLIDE_CACHE_SIZE) \
     /* TODO: Not supposed to happen */ \
         ind_ = -1; \
     ind_; \
@@ -1783,12 +1783,19 @@ static inline bool load_and_prepare_surface(const int slide_index,
 
     /* Prefer the shared, database-driven thumbnail cache. It is keyed by a hash
      * of the folder the tracks live in, which the album tables resolved when
-     * the database loaded -- so this costs a file open, not a database search. */
-    unsigned int art_hash = model->art_key(slide_index);
-    if (pf_cover_size_idx >= 0 && art_hash != 0)
+     * the database loaded -- so this costs a file open, not a database search.
+     * The model's fallback key is opened only when its own key has nothing. */
+    unsigned int keys[2] = {
+        model->art_key(slide_index),
+        model->fallback_key ? model->fallback_key(slide_index) : 0 };
+    for (int k = 0; k < 2 && !got_shared; k++)
     {
         static char aat_file[MAX_PATH];  /* off the loader thread's stack */
+        unsigned int art_hash = keys[k];
         int fh;
+
+        if (pf_cover_size_idx < 0 || art_hash == 0)
+            continue;
 
         /* Opened rather than looked up: this runs while an animation is
          * scrolling, and asking whether the file exists before opening it is
@@ -4128,7 +4135,7 @@ static int album_covers_loop(void)
 {
     int ret;
     int button;
-    bool art_was_building = art_cache_is_busy();
+    unsigned art_seen_generation = art_cache_generation();
     /* What the screen owes, split so that the two things that change on their
      * own account can be repaired on their own account. The covers are the
      * expensive half by a wide margin, and while a track plays most frames want
@@ -4162,8 +4169,8 @@ static int album_covers_loop(void)
          * loader thread fetch them again -- now they exist. Everything goes,
          * the centre slide included: it is the one being looked at, and the
          * loader reloads it first. */
-        bool art_building = art_cache_is_busy();
-        if (art_was_building && !art_building)
+        unsigned art_generation = art_cache_generation();
+        if (art_seen_generation != art_generation && !art_cache_is_busy())
         {
             buf_ctx_lock();
             free_all_slide_prio(-1);
@@ -4171,8 +4178,8 @@ static int album_covers_loop(void)
             queue_remove_from_head(&thread_q, EV_WAKEUP);
             queue_post(&thread_q, EV_WAKEUP, 0);
             art_owed = true;   /* every slide on screen just went away */
+            art_seen_generation = art_generation;
         }
-        art_was_building = art_building;
 
         /* Get input first. The SBS renders during get_custom_action() and
          * writes into the framebuffer (including decorative viewports that

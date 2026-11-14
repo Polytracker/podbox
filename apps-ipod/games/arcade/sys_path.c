@@ -48,7 +48,10 @@ static int walls_of(struct vm *vm, struct value *a, const char *fn,
     return 1;
 }
 
-static int wall(const struct walls *w, int32_t x, int32_t y)
+/* always inlined: the searches call it four times a cell, and -Os would
+ * make each a call */
+static inline __attribute__((always_inline))
+int wall(const struct walls *w, int32_t x, int32_t y)
 {
     if (x < 0 || y < 0 || x >= w->b.w || y >= w->b.h)
         return 1;
@@ -80,31 +83,55 @@ NATIVE(path_field)
     if (a[5].tag != T_I32 || I32(vm, a[5])->len < cells)
         return vm_fail(vm, "path.field() writes to an Int32Array as long as "
                        "the board", "", "");
+    if (w.b.w > 65535 || w.b.h > 65535)
+        return vm_fail(vm, "path.field() works on boards of up to 65535 "
+                       "across and down", "", "");
     int32_t x = whole(a[3], -1), y = whole(a[4], -1);
-    uint32_t *queue = scratch(vm, cells * 4);
-    if (!queue)
+    /* the queue holds each cell as its row and column, so none is divided
+     * to find them: y << 8 | x in two bytes on a board up to 256 across
+     * and down, else y << 16 | x in four. It is working memory from the
+     * heap's top, given back, so it leaves no hole. */
+    int small = w.b.w <= 256 && w.b.h <= 256;
+    uint32_t shift = small ? 8 : 16, low = (1u << shift) - 1;
+    uint32_t bytes = cells * (small ? 2 : 4);
+    uint32_t qoff = gc_scratch(vm, bytes);
+    if (!qoff)
         return 0;
+    uint16_t *q16 = MEM(vm, qoff);
+    uint32_t *q32 = MEM(vm, qoff);
     int32_t *d = I32(vm, a[5])->d;
     for (uint32_t i = 0; i < cells; i++)
         d[i] = -1;
     uint32_t head = 0, tail = 0;
     if (!wall(&w, x, y)) {
         d[y * w.b.w + x] = 0;
-        queue[tail++] = (uint32_t)(y * w.b.w + x);
+        uint32_t c = (uint32_t)y << shift | (uint32_t)x;
+        if (small)
+            q16[tail++] = (uint16_t)c;
+        else
+            q32[tail++] = c;
     }
     while (head < tail) {
-        int32_t i = (int32_t)queue[head++];
-        int32_t cx = i % w.b.w, cy = i / w.b.w;
+        uint32_t q = small ? q16[head] : q32[head];
+        head++;
+        int32_t cx = (int32_t)(q & low), cy = (int32_t)(q >> shift);
+        int32_t i = cy * w.b.w + cx;
         for (int k = 0; k < 4; k++) {
             int32_t nx = cx + step_x[k], ny = cy + step_y[k];
             int32_t j = ny * w.b.w + nx;
             if (wall(&w, nx, ny) || d[j] >= 0)
                 continue;
             d[j] = d[i] + 1;
-            queue[tail++] = (uint32_t)j;
+            uint32_t c = (uint32_t)ny << shift | (uint32_t)nx;
+            if (small)
+                q16[tail++] = (uint16_t)c;
+            else
+                q32[tail++] = c;
         }
     }
-    vm_charge(vm, 10 + cells / 4 + tail * 2);
+    gc_scratch_end(vm, bytes);
+    /* measured on the ARM rig (.build/arcade-rig, sysprobe3) */
+    vm_charge(vm, 10 + cells + tail * 13 / 2);
     *out = mk(T_INT, (int32_t)tail);
     return 1;
 }
@@ -122,7 +149,7 @@ NATIVE(path_next)
     const int32_t *d = I32(vm, a[0])->d;
     int32_t h = (int32_t)(I32(vm, a[0])->len / (uint32_t)w);
     *out = mk(T_INT, -1);
-    vm_charge(vm, 4);
+    vm_charge(vm, 7);                  /* measured on the rig, sysprobe3 */
     if (x < 0 || y < 0 || x >= w || y >= h || d[y * w + x] <= 0)
         return 1;
     int32_t here = d[y * w + x];
@@ -139,12 +166,13 @@ NATIVE(path_next)
 
 /* ---- paths --------------------------------------------------------------- */
 
-/* A* keeps per cell: the steps from the start, the way it was reached,
- * whether it is open or closed, and where it sits in the heap, an array
- * of cells ordered by steps plus the distance still to go. */
+/* A* keeps per cell: the steps from the start, the distance still to go
+ * (worked out once, as the cell is first reached: a division each way),
+ * the way it was reached, whether it is open or closed, and where it sits
+ * in the heap, an array of cells ordered by steps plus distance to go. */
 struct astar
 {
-    uint16_t *g, *heap, *pos;
+    uint16_t *g, *h, *heap, *pos;
     uint8_t *came, *state;
     uint32_t n;
     int32_t w, gx, gy;
@@ -163,7 +191,7 @@ static int32_t to_go(const struct astar *s, uint32_t i)
  * the one nearer the goal */
 static int before(const struct astar *s, uint32_t i, uint32_t j)
 {
-    int32_t hi = to_go(s, i), hj = to_go(s, j);
+    int32_t hi = s->h[i], hj = s->h[j];
     int32_t fi = s->g[i] + hi, fj = s->g[j] + hj;
     return fi < fj || (fi == fj && hi < hj);
 }
@@ -228,12 +256,13 @@ NATIVE(path_find)
         vm_charge(vm, 10);
         return 1;
     }
-    uint8_t *mem = scratch(vm, cells * 8);
+    uint8_t *mem = scratch(vm, cells * 10);
     if (!mem)
         return 0;
     struct astar s;
     s.g = (uint16_t *)mem;
-    s.heap = s.g + cells;
+    s.h = s.g + cells;
+    s.heap = s.h + cells;
     s.pos = s.heap + cells;
     s.came = (uint8_t *)(s.pos + cells);
     s.state = s.came + cells;
@@ -244,6 +273,7 @@ NATIVE(path_find)
     uint32_t start = (uint32_t)(y0 * w.b.w + x0);
     uint32_t goal = (uint32_t)(y1 * w.b.w + x1);
     s.state[start] = OPEN;
+    s.h[start] = (uint16_t)to_go(&s, start);
     put(&s, s.n++, (uint16_t)start);
     uint32_t expanded = 0;
     int found = 0;
@@ -268,12 +298,15 @@ NATIVE(path_find)
             s.came[j] = (uint8_t)k;
             if (s.state[j] == UNSEEN) {
                 s.state[j] = OPEN;
+                s.h[j] = (uint16_t)to_go(&s, j);
                 put(&s, s.n++, (uint16_t)j);
             }
             up(&s, s.pos[j]);
         }
     }
-    vm_charge(vm, 10 + cells / 8 + expanded * 6);
+    /* measured on the rig (sysprobe3): about 34 units a cell expanded,
+     * the queue's ordering most of it */
+    vm_charge(vm, 10 + cells / 2 + expanded * 34);
     if (!found)
         return 1;
     /* back from the goal by the ways each cell was reached, into the heap's
@@ -295,18 +328,12 @@ NATIVE(path_find)
 
 /* ---- sight --------------------------------------------------------------- */
 
-/* path.sight(b, w, solid, x0, y0, x1, y1): whether the line between the
- * centres of cells x0, y0 and x1, y1 crosses only open cells, the two
- * ends aside. Through a corner exactly, both cells beside it must be
- * open: no seeing through a diagonal gap. */
-NATIVE(path_sight)
+/* Whether the line between the centres of cells x, y and x1, y1 crosses
+ * only open cells, the two ends aside. Through a corner exactly, both
+ * cells beside it must be open: no seeing through a diagonal gap. */
+static int line_clear(const struct walls *w, int32_t x, int32_t y,
+                      int32_t x1, int32_t y1)
 {
-    (void)argc;
-    struct walls w;
-    if (!walls_of(vm, a, "path.sight", &w))
-        return 0;
-    int32_t x = whole(a[3], 0), y = whole(a[4], 0);
-    int32_t x1 = whole(a[5], 0), y1 = whole(a[6], 0);
     int32_t nx = x1 - x, ny = y1 - y;
     int32_t sx = nx < 0 ? -1 : 1, sy = ny < 0 ? -1 : 1;
     nx = nx < 0 ? -nx : nx;
@@ -316,7 +343,7 @@ NATIVE(path_sight)
         /* which edge the line meets first: the next column's or row's */
         int64_t cmp = (int64_t)(1 + 2 * i) * ny - (int64_t)(1 + 2 * j) * nx;
         if (cmp == 0) {
-            if (wall(&w, x + sx, y) || wall(&w, x, y + sy))
+            if (wall(w, x + sx, y) || wall(w, x, y + sy))
                 clear = 0;
             x += sx; y += sy; i++; j++;
         } else if (cmp < 0) {
@@ -324,11 +351,79 @@ NATIVE(path_sight)
         } else {
             y += sy; j++;
         }
-        if ((x != x1 || y != y1) && wall(&w, x, y))
+        if ((x != x1 || y != y1) && wall(w, x, y))
             clear = 0;
     }
-    vm_charge(vm, 8 + (uint32_t)(nx + ny));
+    return clear;
+}
+
+/* path.sight(b, w, solid, x0, y0, x1, y1): line_clear() between them */
+NATIVE(path_sight)
+{
+    (void)argc;
+    struct walls w;
+    if (!walls_of(vm, a, "path.sight", &w))
+        return 0;
+    int32_t x = whole(a[3], 0), y = whole(a[4], 0);
+    int32_t x1 = whole(a[5], 0), y1 = whole(a[6], 0);
+    int clear = line_clear(&w, x, y, x1, y1);
+    int32_t nx = x1 - x, ny = y1 - y;
+    nx = nx < 0 ? -nx : nx;
+    ny = ny < 0 ? -ny : ny;
+    vm_charge(vm, 8 + (uint32_t)(nx + ny) / 4);     /* measured, sysprobe3 */
     *out = mk(T_INT, clear);
+    return 1;
+}
+
+/* path.view(b, w, solid, x, y, r, out, [mark]): every cell within r of
+ * x, y that path.sight sees -- walls included, so a room's walls show --
+ * into out, a Uint8Array the board's size: cleared first and each seen
+ * cell 1; with mark, only the seen cells set to it, the rest kept, for a
+ * map that remembers. How many are seen. */
+NATIVE(path_view)
+{
+    struct walls w;
+    if (!walls_of(vm, a, "path.view", &w))
+        return 0;
+    int32_t x = whole(a[3], 0), y = whole(a[4], 0), r = whole(a[5], 0);
+    int32_t cells = w.b.w * w.b.h;
+    if (a[6].tag != T_U8 || (int32_t)U8A(vm, a[6])->len < cells)
+        return vm_fail(vm, "path.view() needs a Uint8Array the board's "
+                       "size to mark", "", "");
+    int keep = argc > 7 && is_num(a[7]);
+    uint8_t mark = keep ? (uint8_t)floor_int(a[7]) : 1, *o = U8A(vm, a[6])->d;
+    if (!keep)
+        memset(o, 0, (size_t)cells);
+    if (r < 0)
+        r = 0;
+    int32_t seen = 0;
+    uint32_t steps = 0;
+    /* a viewer off the board sees nothing of it */
+    if (x < 0 || y < 0 || x >= w.b.w || y >= w.b.h) {
+        vm_charge(vm, 20);
+        *out = mk(T_INT, 0);
+        return 1;
+    }
+    /* the square round x, y as far as it lies on the board, its distances
+     * squared in 64 bits: r may reach far past it */
+    int64_t r2 = (int64_t)r * r + r;
+    int32_t cy0 = (int64_t)y - r > 0 ? y - r : 0;
+    int32_t cy1 = (int64_t)y + r < w.b.h - 1 ? y + r : w.b.h - 1;
+    int32_t cx0 = (int64_t)x - r > 0 ? x - r : 0;
+    int32_t cx1 = (int64_t)x + r < w.b.w - 1 ? x + r : w.b.w - 1;
+    for (int32_t cy = cy0; cy <= cy1; cy++)
+        for (int32_t cx = cx0; cx <= cx1; cx++) {
+            int64_t dx = (int64_t)cx - x, dy = (int64_t)cy - y;
+            if (dx * dx + dy * dy > r2)
+                continue;
+            steps += (uint32_t)((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy));
+            if (line_clear(&w, x, y, cx, cy)) {
+                o[cy * w.b.w + cx] = mark;
+                seen++;
+            }
+        }
+    vm_charge(vm, 20 + (uint32_t)seen + steps / 4);
+    *out = mk(T_INT, seen);
     return 1;
 }
 
@@ -414,7 +509,7 @@ NATIVE(path_ray)
         }
         cells++;
         if (t > far) {
-            vm_charge(vm, 10 + cells * 2);
+            vm_charge(vm, 10 + cells * 11);
             return 1;
         }
     }
@@ -431,6 +526,8 @@ NATIVE(path_ray)
     vm_out_set(vm, a[5], 3, mk(T_INT, cy));
     vm_out_set(vm, a[5], 4, mk(T_INT, face));
     *out = mk(T_INT, 1);
-    vm_charge(vm, 10 + cells * 2);
+    /* measured on the rig (sysprobe3): a cell crossed is a 64-bit divide
+     * or two, about 11 units */
+    vm_charge(vm, 10 + cells * 11);
     return 1;
 }

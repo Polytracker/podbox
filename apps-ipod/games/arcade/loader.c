@@ -8,7 +8,7 @@
  * building the tables from them; the error's source position from LINE;
  * arcade_load() itself.
  *
- * The byte layouts are the ones tools/arcade/src/compiler.js writes; its
+ * The byte layouts are the ones arcade/sdk/src/compiler.js writes; its
  * bytecode.js load() is the reference this follows.
  ***************************************************************************/
 #include <string.h>
@@ -170,11 +170,45 @@ static uint32_t crc32(const uint8_t *b, uint32_t n)
     return c ^ 0xffffffffu;
 }
 
-static uint32_t rd16(const uint8_t *p) { return p[0] | (p[1] << 8); }
-static uint32_t rd32(const uint8_t *p)
+/* Lazy chunk c, read from the cart file through the host and checked,
+ * then unpacked into size bytes at dst, or only checked when dst is NULL:
+ * 1, or 0 with the error set. Its bytes are working memory, from the
+ * heap's top, or the arena's while the cart loads. */
+int lazy_unpack(struct vm *vm, const struct lazy *c, uint8_t *dst,
+                uint32_t size)
 {
-    return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
+    const struct arcade_host *h = vm->host;
+    if (!h || !h->cart_read)
+        return vm_fail(vm, "this player cannot read the game's maps and "
+                       "images as it plays", "", "");
+    uint32_t held = 0;
+    uint8_t *buf;
+    if (vm->heap_hi) {
+        uint32_t off = gc_scratch(vm, c->len);
+        if (!off)
+            return 0;
+        buf = MEM(vm, off);
+        held = c->len;
+    } else {
+        uint32_t top = (vm->size - c->len) & ~7u;
+        if (c->len > vm->size || top < vm->perm)
+            return vm_fail(vm, "not enough memory for this game", "", "");
+        buf = MEM(vm, top);
+    }
+    crc_init();
+    int ok = h->cart_read(h->ctx, c->at, buf, c->len) == c->len &&
+             crc32(buf, c->len) == c->crc &&
+             (!dst || lz4_decode(buf, c->len, dst, size));
+    if (held)
+        gc_scratch_end(vm, held);
+    /* measured on the ARM rig (lzcost): about 41 cycles a packed byte,
+     * read, checked and unpacked; the unpacked bytes are the caller's */
+    vm_charge(vm, c->len);
+    return ok ? 1 : vm_fail(vm, "the game file has changed or is damaged",
+                            "", "");
 }
+
+static uint32_t rd16(const uint8_t *p) { return p[0] | (p[1] << 8); }
 
 /* A bounded cursor over a chunk. */
 struct cur
@@ -209,7 +243,7 @@ static uint32_t c16(struct cur *c)
 static uint32_t c32(struct cur *c)
 {
     const uint8_t *p = take(c, 4);
-    return p ? rd32(p) : 0;
+    return p ? rd_le32(p) : 0;
 }
 
 /* ---- the tables ------------------------------------------------------- */
@@ -223,7 +257,10 @@ static int load_header(struct vm *vm, const uint8_t *p, uint32_t n)
 {
     if (n < 20)
         return bad(vm, "header");
-    if (rd16(p) != 1)
+    /* format 2 adds ending() to the entries; 3 keeps each map's cells, and
+     * each lazy image's pixels, in a chunk of its own */
+    vm->format = (uint8_t)rd16(p);
+    if (vm->format < 1 || vm->format > 3)
         return vm_fail(vm, "This game needs a newer PodBox", "", "");
     vm->api = (uint16_t)rd16(p + 2);
     if (vm->api > ARCADE_API_VERSION)
@@ -231,10 +268,25 @@ static int load_header(struct vm *vm, const uint8_t *p, uint32_t n)
     vm->rate = p[4];
     vm->menu_button = p[5];
     vm->music = p[6];
+    vm->no_suspend = p[7] & 1;
     if (vm->rate != 20 && vm->rate != 25 && vm->rate != 33 && vm->rate != 50)
         return bad(vm, "rate");
     memcpy(vm->id, p + 12, 8);
     return 1;
+}
+
+/* Text from the chunk into a fixed buffer, cut to fit and ended */
+static void copy_text(struct cur *c, char *dst, uint32_t cap)
+{
+    uint32_t len = c16(c);
+    const uint8_t *t = take(c, len);
+    if (!t)
+        len = 0;
+    if (len > cap - 1)
+        len = cap - 1;
+    if (len)
+        memcpy(dst, t, len);
+    dst[len] = 0;
 }
 
 /* BORD, the cart's high-score boards: a count, then each one's key,
@@ -270,31 +322,12 @@ static int load_boards(struct vm *vm, const uint8_t *p, uint32_t n)
         b->version = (uint16_t)c16(&c);
         b->low = c8(&c) != 0;
         b->format = (uint8_t)c8(&c);
-        uint32_t len = c16(&c);
-        const uint8_t *t = take(&c, len);
+        copy_text(&c, b->title, sizeof(b->title));
         if (c.bad || b->format > ARCADE_SCORE_TICKS)
             return bad(vm, "boards");
-        if (len > sizeof(b->title) - 1)
-            len = sizeof(b->title) - 1;
-        memcpy(b->title, t, len);
-        b->title[len] = 0;
     }
     s->count = (int)count;
     return 1;
-}
-
-/* Text from the chunk into a fixed buffer, cut to fit and ended */
-static void copy_text(struct cur *c, char *dst, uint32_t cap)
-{
-    uint32_t len = c16(c);
-    const uint8_t *t = take(c, len);
-    if (!t)
-        len = 0;
-    if (len > cap - 1)
-        len = cap - 1;
-    if (len)
-        memcpy(dst, t, len);
-    dst[len] = 0;
 }
 
 /* OPTN, the cart's options: a count, then each one's key, type, default,
@@ -385,8 +418,8 @@ static int load_fonts(struct vm *vm, const uint8_t *p, uint32_t n)
         f->glyphs = c.p;
         uint32_t room = (uint32_t)(c.end - c.p), end = 0, last = 0;
         for (uint32_t g = 0; g < f->n; g++) {
-            uint32_t cp = rd32(f->index + g * 8);
-            uint32_t off = rd32(f->index + g * 8 + 4);
+            uint32_t cp = rd_le32(f->index + g * 8);
+            uint32_t off = rd_le32(f->index + g * 8 + 4);
             if ((g && cp <= last) || off > room || room - off < 5)
                 return bad(vm, "fonts");
             const uint8_t *q = f->glyphs + off;
@@ -407,8 +440,8 @@ static int load_code(struct vm *vm, const uint8_t *p, uint32_t n)
     struct cur c = { p, p + n, 0 };
     vm->nfns = c16(&c);
     vm->nic = c16(&c);
-    for (int i = 0; i < 4; i++)
-        vm->entry[i] = c16(&c);
+    for (int i = 0; i < 5; i++)
+        vm->entry[i] = i < 4 || vm->format >= 2 ? c16(&c) : NONE;
     uint32_t off = perm_alloc(vm, vm->nfns * sizeof(struct fninfo) + 8);
     if (!off)
         return vm_fail(vm, "not enough memory for this game", "", "");
@@ -623,20 +656,22 @@ static int load_runtime(struct vm *vm)
 static int read_chunks(struct vm *vm, arcade_read_fn read, void *ctx)
 {
     uint8_t hd[8];
-    const uint8_t *chunk[15] = { 0 };
-    uint32_t clen[15] = { 0 };
-    static const char tags[15][5] = { "PBG1", "CODE", "CNST", "GLOB", "LINE",
-                                      "PALS", "SHET", "MAPS", "IMGS", "SFX_",
-                                      "BORD", "OPTN", "DATA", "ACHV", "FONT" };
+    static const char tags[][5] = { "PBG1", "CODE", "CNST", "GLOB", "LINE",
+                                    "PALS", "SHET", "MAPS", "IMGS", "SFX_",
+                                    "BORD", "OPTN", "DATA", "ACHV", "FONT" };
+    enum { CHUNKS = sizeof(tags) / sizeof(tags[0]) };
+    const uint8_t *chunk[CHUNKS] = { 0 };
+    uint32_t clen[CHUNKS] = { 0 };
     int first = 1;
+    uint32_t pos = 0;               /* where the chunk starts in the file */
     crc_init();
-    for (;;) {
+    for (;; pos += 12 + rd_le32(hd + 4)) {
         uint32_t got = read(ctx, hd, 8);
         if (got == 0)
             break;
         if (got != 8)
             return bad(vm, "chunk header");
-        uint32_t len = rd32(hd + 4);
+        uint32_t len = rd_le32(hd + 4);
         /* no chunk is bigger than the memory, and len + 4 must not wrap */
         if (len > vm->size - 4)
             return bad(vm, "chunk length");
@@ -644,9 +679,36 @@ static int read_chunks(struct vm *vm, arcade_read_fn read, void *ctx)
             return vm_fail(vm, "not a game file", "", "");
         first = 0;
         int want = -1;
-        for (int i = 0; i < 15; i++)
+        for (int i = 0; i < CHUNKS; i++)
             if (!memcmp(hd, tags[i], 4))
                 want = i;
+        /* a map's cells or an image's pixels, left in the file: where
+         * they are and their checksum, read when they are used */
+        int mapc = !memcmp(hd, "MAPC", 4), imgc = !memcmp(hd, "IMGC", 4);
+        if (mapc || imgc) {
+            uint32_t *nc = mapc ? &vm->nmapc : &vm->nimgc;
+            struct lazy **table = mapc ? &vm->mapc : &vm->imgc;
+            uint8_t sum[4];
+            if (*nc >= LAZY_MAX)
+                return vm_fail(vm, "this game has more than 64 maps or "
+                               "lazy images", "", "");
+            if (!*table) {
+                uint32_t at = perm_alloc(vm, LAZY_MAX * sizeof(struct lazy));
+                if (!at)
+                    return vm_fail(vm, "not enough memory for this game", "",
+                                   "");
+                *table = MEM(vm, at);
+            }
+            struct lazy *c = *table + *nc;
+            if (read(ctx, NULL, len) != len || read(ctx, sum, 4) != 4)
+                return bad(vm, "truncated");
+            c->at = pos + 8;
+            c->len = len;
+            c->crc = rd_le32(sum);
+            (*nc)++;
+            vm->cart_hash = (vm->cart_hash << 5 | vm->cart_hash >> 27) ^ c->crc;
+            continue;
+        }
         int is_meta = !memcmp(hd, "META", 4);
         if (want < 0 && !is_meta) {
             if (read(ctx, NULL, len + 4) != len + 4)
@@ -659,10 +721,10 @@ static int read_chunks(struct vm *vm, arcade_read_fn read, void *ctx)
         uint8_t *b = MEM(vm, off);
         if (read(ctx, b, len + 4) != len + 4)
             return bad(vm, "truncated");
-        if (crc32(b, len) != rd32(b + len))
+        if (crc32(b, len) != rd_le32(b + len))
             return bad(vm, "a checksum fails");
         vm->cart_hash = (vm->cart_hash << 5 | vm->cart_hash >> 27) ^
-                        rd32(b + len);
+                        rd_le32(b + len);
         if (is_meta) {
             vm->meta = b;
             vm->meta_len = len;

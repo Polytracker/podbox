@@ -59,7 +59,7 @@ Settings
 | Balance | Shifts the output towards one ear. Meant for correcting a hearing difference or a worn earphone, not for effect. | 0% |  |
 | Channel Configuration | What ends up in each ear: normal stereo, both channels mixed to mono, one channel in both ears, the two swapped, or karaoke, which cancels whatever is common to both and so removes most centred vocals. Mono is the useful one if you often listen with a single earbud. | Stereo |  |
 | Stereo Width | Widens or narrows the stereo image. Below 100% pulls it towards mono; above pushes it apart, which can sound impressive briefly and tiring for long. | 100% |  |
-| Dithering | Adds a very quiet noise when reducing bit depth, which trades a little hiss for the absence of a particular kind of distortion on very quiet passages. Inaudible on almost all material through headphones. | No | **Adv** |
+| Dithering | Adds a very quiet noise when reducing bit depth, which trades a little hiss for the absence of a particular kind of distortion on very quiet passages. Inaudible on almost all material through headphones. Automatic adds it only where it is needed. A 16-bit file plays exactly as it is in the file, bit for bit, unless Replaygain or a sound effect changes it; 24-bit and lossy files are dithered. A USB DAC gets the same, with the volume at 0 dB or above. Always dithers everything. | Auto on a new install | **Adv** |
 | Auditory Fatigue Reduction | Tames the harshness that makes long listening tiring, mostly in the upper mids. If you can hear it working, it is set too high. | Off |  |
 
 ### Sound Settings — Crossfeed
@@ -157,7 +157,7 @@ Settings
 
 | Setting | What it does | Default | |
 |---|---|---|---|
-| Replaygain Type | Uses the loudness information many rippers write into files, so albums recorded at different levels play at a similar volume. Album gain keeps the balance between tracks on one record; track gain levels everything, which suits shuffling. | Track Gain If Shuffling |  |
+| Replaygain Type | Uses the loudness information many rippers write into files, so albums recorded at different levels play at a similar volume. Album gain keeps the balance between tracks on one record; track gain levels everything, which suits shuffling. Off plays each file at its own level, which a file needs to play bit for bit. | Off on a new install |  |
 | Prevent Clipping | Backs the gain off when applying it would push the track into clipping, rather than clipping it. | No | **Adv** |
 | Pre-amp | A fixed adjustment applied on top of whatever Replaygain works out. Useful if the whole library ends up quieter than you want once levelling is applied. | 0 dB | **Adv** |
 
@@ -177,7 +177,7 @@ Settings
 | Playlist Viewer Settings ▸ Show Indices | Numbers the entries in the playing queue. | Yes |  |
 | Playlist Viewer Settings ▸ Track Display | What each entry in the queue and in a saved playlist shows: the filename, the full path, or the title from the tags, alone or with the album. Number, Title & Album also puts the disc and track number first, which shows whether an album's tracks are still in order. | Title from ID3 Tags |  |
 | Recursively Insert Directories | Adding a folder to a playlist also adds everything in its subfolders. | On |  |
-| Queue ▸ Warn When Replacing Queue | Asks before replacing a queue you have built up by hand, which is otherwise easy to lose with one Select. | Yes |  |
+| Queue ▸ Warn When Replacing Queue | Asks before replacing a queue you have built up by hand, which is otherwise easy to lose with one Select. Choosing one track while the queue plays offers Play Now instead, which plays it at once and keeps the rest of the queue. | Yes |  |
 | Queue ▸ Party Mode | Anything selected is added to the end of the queue instead of replacing it, so a second person cannot wipe out what is already lined up. | No |  |
 | Queue ▸ Keep Current Track When Replacing Playlist | Leaves the playing track in place when a new selection replaces the queue, so the music does not stop mid-song. | Yes | **Adv** |
 | Queue ▸ Show Shuffled Adding Options | Adds Play Later Shuffled and Play Last Shuffled to the More menu of a folder, album or playlist. | Yes | **Adv** |
@@ -194,9 +194,11 @@ Settings
 | Setting | What it does | Default | |
 |---|---|---|---|
 | Default Browser | Which browser the root and the now-playing screen return to: Music, Files or Playlists. | Music |  |
-| Select Action | What a press of Select does on the now-playing screen: go back to the previous screen as Menu Action does, or to the browser last used, to Music, Album Covers or Files, open the lyrics, the artist bio, the liner notes, the queue or Theme Options, or one of the now-playing menu's other actions. Theme Options says Unavailable when the theme has none. Holding Select always opens the now-playing menu. | Previous Browser | **Adv** |
+| Select Action | What a press of Select does on the now-playing screen: go back to the previous screen as Menu Action does, or to the browser last used, to Music, Album Covers or Files, open the lyrics, the artist bio, the liner notes, the queue or Theme Options, or one of the now-playing menu's other actions. Go to Album opens the playing track's album on that track, where Go to Album Via says; a podcast or book kept apart opens in its own menu. Theme Options says Unavailable when the theme has none. Theme Toggle is offered once a theme option has been assigned to a button in Theme Options, or the theme names one. Holding Select always opens the now-playing menu. | Previous Browser | **Adv** |
 | Select + Play Action | What pressing Select and Play together does on the now-playing screen: any of the actions Select offers, or the whole now-playing menu, or nothing. | Lyrics |  |
-| Menu Action | Where Menu goes from the now-playing screen. Previous Screen goes back to the list the music was started from, in the same place -- a Music list, Files, Playlists, Podcasts, the queue, Album Covers or Artist Portraits -- and Menu from there reaches the main menu. Music started anywhere else goes back to the main menu. Main Menu goes straight there. | Previous Screen |  |
+| Menu Action | Where Menu goes from the now-playing screen. Previous Screen goes back to the list the music was started from, in the same place -- a Music list, Files, Playlists, Podcasts, the queue, Album Covers or Artist Portraits -- and Menu from there reaches the main menu. Music started anywhere else goes back to the main menu. Main Menu goes straight there. Menu can also go anywhere else Select can -- Music, Files, Go to Album -- or stop playback. | Previous Screen |  |
+| Long Press Play Action | What a long press of Play does on the now-playing screen: open Album Covers over it, stop playback, or any of the actions Select offers. | Album Covers |  |
+| Go to Album Via | Where Go to Album on the now-playing screen opens the album. Direct opens it on its own, and Left goes back to the now-playing screen. Album, Album Artist, Artist and Genre open it inside Music under that list, as though browsed to, and Left climbs back up it. Under Artist or Genre the album shows only that artist's or that genre's tracks. Where the list is hidden or does not reach the album, it opens on its own. | Direct |  |
 
 **Appearance** opens `Settings > Appearance > Now Playing Screen`, below.
 
@@ -238,10 +240,6 @@ Settings
 | Featured Artists | Reads guest credits -- the "feat. Somebody" in a title or artist -- and lets you browse by them: Music gains a Featured Artists row, and an artist's album list gains the records they only guest on. Needs the database loaded to RAM. A name with a comma or ampersand, like Tyler, The Creator, reads as two people unless an album is under it. List such names one per line in /.rockbox/library/user/known_artists.txt, then reboot, or switch Featured Artists off and on. | No |  |
 | Segregate Audiobooks | Auto keeps audiobooks out of the music and gives them an Audiobooks row on the main menu, whenever the library has any; albums, artists, the carousel and search then show music only. Off lists them with the music. Only the genre tag counts: one containing "audiobook", "audio book" or "spoken word", or exactly "book", "speech" and the like. Podcasts have their own setting. Books keep their place either way: open one again under Audiobooks and a Resume row heads its chapters. An album with one music track stays with the music. | Auto |  |
 | Segregate Podcasts | Auto keeps podcasts out of the music and gives them a Podcasts row on the main menu, listing each show with its newest episode first, whenever the library has any. Off lists them with the music. A podcast is a track whose genre is exactly "Podcast" or "Podcasts". Either way, each episode keeps its place. | Auto |  |
-| Quiz Questions ▸ Name the Track | Music Quiz rounds that play a clip and ask which track it is. | Yes |  |
-| Quiz Questions ▸ Name the Artist | Music Quiz rounds that play a clip and ask who it is by. The wrong answers are artists that sound alike, or share the genre and decade, as the game goes on. | Yes |  |
-| Quiz Questions ▸ Name the Album | Music Quiz rounds that play a clip and ask which album it is from. In the later rounds the wrong answers are the same artist's other albums. | Yes |  |
-| Quiz Questions ▸ Name the Year | Music Quiz rounds that play a clip and ask what year it is from. The hardest kind: the answers start five years apart and end one apart, and they are only as right as the year tags. | No |  |
 
 **Appearance** opens Art Rows, from
 `Settings > Appearance > Interface Elements`.
@@ -345,7 +343,7 @@ below the table.
 | Update Database | Finds music added since the last scan. The fix for *my new album isn't showing up*. |
 | Update Index | Makes Album Covers lay out its covers afresh the next time it opens. |
 | Update Art Cache | Fills in thumbnails that are missing, for artwork added to folders already scanned, and redoes those whose image was replaced or deleted. |
-| Rescan Books, Documents & Images | Rebuilds the Books lists and the flat Documents and Images lists. Normally reruns itself after a USB session. |
+| Rebuild File Index | Rebuilds the Books lists, the flat Documents and Images lists and the Arcade. Normally reruns itself after a USB session. |
 | Update Sound Analysis | Measures tracks the sound analysis has not covered, and retries any it could not read. Needs the charger, and holds the player while it runs. |
 | Rebuild Playback Report | Discards the report's saved figures, the track names it resolved and the moved folders it matched, so it reads the log and the database again. For names that still look wrong after a database update. |
 | Rebuild Database | Discards the database and reads every file again, keeping play counts and ratings. Slow. |
@@ -368,7 +366,7 @@ after new music, run it after `database_pb.exe`.
 
 | Setting | What it does | Default | |
 |---|---|---|---|
-| Theme Options | The loaded theme's own choices, such as what its playing screen shows. Here only when the theme offers them. Each change is saved at once and shows as soon as you leave. It can also go on the Now Playing screen's context menu: turn it on in Context Menus > Now Playing Menu. It is not offered there for a theme that has to reload to show a change, since reloading stops the music. | — |  |
+| Theme Options | The loaded theme's own choices, such as what its playing screen shows. Here only when the theme offers them. Each change is saved at once and shows as soon as you leave. It can also go on the Now Playing screen's context menu: turn it on in Context Menus > Now Playing Menu. It is not offered there for a theme that has to reload to show a change, since reloading stops the music. To change an option from a button, choose Assign to Button in its context menu, then set a button to Theme Toggle in Playback > Now Playing Screen. Each press moves the option to its next choice. A theme can name one for you; assigning your own replaces it. | — |  |
 | Font | The typeface used throughout the interface. A larger font is easier to read and fits fewer rows on screen. | — |  |
 
 ### Appearance — Skins
@@ -402,8 +400,10 @@ Separator set above zero.
 |---|---|---|---|
 | Art Rows ▸ Album Art Rows | Draws album thumbnails beside the rows in the database browser. Needs a theme that supports artwork in lists, or the rows are tall and empty. | Yes |  |
 | Art Rows ▸ Artist Art Rows | Draws artist photographs beside the rows in the database browser, from /Artwork/People or the artist's folder. Needs a theme that supports artwork in lists, or the rows are tall and empty. | No |  |
+| Art Rows ▸ Album Cover If No Photo | Shows the cover of an artist's latest album when there is no photograph of them, instead of the placeholder: beside their row, in Artist Portraits, and on the now-playing screen when it shows the artist photograph. | No |  |
 | Art Rows ▸ Audiobook Art Rows | Draws cover art beside the rows in the Audiobooks browser. Needs a theme that supports artwork in lists, or the rows are tall and empty. | Yes |  |
 | Art Rows ▸ Audiobook Author Art Rows | Draws a photograph beside each author in the Audiobooks browser, from an image named after them in /Artwork/People or a folder.jpg in the author's folder. Without one the row shows a placeholder. | No |  |
+| Art Rows ▸ Audiobook Cover If No Photo | Shows the cover of an audiobook author's latest book beside their row when there is no photograph of them, instead of the placeholder. Only shown where Audiobook Author Art Rows is on. | No |  |
 | Art Rows ▸ Book Art Rows | Draws each book's cover beside its row in the Books lists. Needs a theme that supports artwork in lists, or the rows are tall and empty. | Yes |  |
 | Art Rows ▸ Book Author Art Rows | Draws a photograph beside each author in Books > By Author, from an image named after them in /Artwork/People, or a folder.jpg in a folder named after them, or else in the folder the book is in or the one above. | No |  |
 | Art Rows ▸ Podcast Art Rows | Draws each show's art beside its row in the Podcasts list, from an image named after the show in /Artwork/Covers, the art its episodes carry or a folder.jpg beside them. Needs a theme that supports artwork in lists, or the rows are tall and empty. | Yes |  |
@@ -488,7 +488,7 @@ Shadow Colour only while there is a shadow to colour.
 
 | Setting | What it does | Default | |
 |---|---|---|---|
-| Enabled | Whether text too long for its line scrolls. Off, it is cut short with "..." instead, in lists, menus, the theme's own scrolling lines and the carousel's captions, and the other scroll settings then have nothing to move. Spike's Scroll Now Playing does nothing while this is off. | Yes |  |
+| Enabled | Whether text too long for its line scrolls. Off, it is cut short with "..." instead, in lists, menus, the theme's own scrolling lines and the carousel's captions, and the other scroll settings then have nothing to move. | Yes |  |
 | Scroll Speed | How quickly text too long for its line moves. | 9 |  |
 | Vertical Scroll Speed | How quickly a box of text too long for it moves up, such as a podcast episode's notes, apart from Scroll Speed's sideways lines. | 10 | **Adv** |
 | Scroll Start Delay | How long text waits before it starts moving, so a row can be read before it slides. | 1 s |  |
@@ -597,7 +597,7 @@ Shadow Colour only while there is a shadow to colour.
 | USB Mode | What a USB connection does: present the disk to the computer, or charge only. Charge only suits a plug that would otherwise take the disk and interrupt playback. Docks and cars that play from the player over USB still work. Drive Only presents the disk and nothing else, for a car stereo that reads iPods as USB drives but does not see this one. It overrides Accessory Protocol, Support iPhone Accessories, Identify As, USB Sound Card, USB HID and USB DAC Output without changing them, so cars and docks that play from the player over USB do not work until it is switched back. Docks on the dock connector still do. A change takes effect at the next connection. | Mass Storage |  |
 | USB HID | Presents the player as a keyboard or remote control to the computer, so its buttons can drive playback there. On an iPod Video in mass-storage mode, USB Sound Card takes its place when both are on. | No | **Adv** |
 | USB Keypad Mode | What the buttons send while acting as a USB device: media keys, a mouse, or presentation controls. | Multimedia | **Adv** |
-| USB Sound Card | Lets a computer play through the player: it shows up as a sound card, and what the computer plays comes out of the headphone socket. The computer's volume control sets the player's. Takes effect at the next restart, and while on it keeps about 130K of memory back from playback. On an iPod Video in mass-storage mode it takes USB HID's place, as there is room for only one of the two beside the disk. | Off | **Adv** |
+| USB Sound Card | Lets a computer play through the player: it shows up as a sound card, and what the computer plays comes out of the headphone socket. The wheel sets the player's volume, and so does the computer's volume control where it asks the player rather than turning the sound down itself. Takes effect at the next restart, and while on it keeps about 130K of memory back from playback. On an iPod Video in mass-storage mode it takes USB HID's place, as there is room for only one of the two beside the disk. | Off | **Adv** |
 
 ### System — USB — USB DAC Output
 
@@ -719,18 +719,6 @@ off, and how much space their files take. A log file that reaches 256 KB is
 renamed with `.1` before its extension, replacing the last one, and a new file
 starts; send both when asked for a log. While any log is on, a message at
 startup says so, and how long is left.
-
----
-
-## Spike
-
-Held Menu inside the game, not Settings — but they are settings like any
-other, so they survive leaving the game and survive the session.
-
-| Setting | What it does | Default | |
-|---|---|---|---|
-| Now Playing | Names the track under Spike's field, with the time remaining beside it: Title shows the track's title, and Title and Artist adds who it is by. The field rises to make room, so the game is a little smaller with this on. Off gives the whole panel to the game. | Off |  |
-| Scroll Now Playing | Whether a track name too long for the space travels along or is simply cut off. It steps a character at a time on the beat rather than gliding. Off is the calmer choice while you are playing, and shows as much of the name as fits. Off as well while Scrolling is off. | No |  |
 
 ---
 

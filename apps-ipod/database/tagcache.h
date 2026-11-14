@@ -306,7 +306,11 @@ struct tagcache_artist {
     uint16_t albums;
     uint16_t spoken_albums;      /* albums all of whose tracks are spoken */
     uint16_t podcast_albums;     /* of them, all of whose are podcasts */
-    uint16_t pad;
+    int16_t  cover_year;         /* the year of cover_hash's album */
+    uint32_t cover_hash;         /* art_hash of its latest album, the first
+                                    of them in table order on a tie; of its
+                                    books and podcasts only when it has no
+                                    music */
 };
 
 /* Albums in album-seek order then artist-seek order; artists in seek order.
@@ -339,6 +343,9 @@ int32_t tagcache_commit_id(void);
  * it with tagcache_retrieve(), one seek. */
 bool tagcache_entry_string(int idx_id, int tag, char *buf, size_t size);
 bool tagcache_entry_numeric(int idx_id, int tag, long *value);
+/* A string tag's seek for a found entry, as a list row of that tag has it in
+ * its extraseek; -1 when not in RAM. <Untagged> has a seek like any value. */
+long tagcache_entry_seek(int idx_id, int tag);
 /* A string tag's value by the seek a search gave for it (result_seek). The
  * search's idx_id names a song only for title and filename, so for an artist,
  * album or genre this is the way to its name. RAM only; false for

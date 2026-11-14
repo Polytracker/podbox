@@ -18,6 +18,56 @@
                                   struct value *out)
 #define RET_INT(v) (*out = mk(T_INT, (int32_t)(v)), 1)
 
+/* The rows a list moves for clicks of the wheel in a tick of 1/rate s, as
+ * the player's own lists move them: a step each SCROLL_CLICKS clicks, and
+ * each step then many rows once the wheel's smoothed speed passes
+ * SCROLL_START degrees a second, by the speed's fourth power. A step the
+ * other way, or one after SCROLL_PAUSE ms with none, starts the speed
+ * again. The click wheel's driver and button_apply_acceleration() hold
+ * the same numbers for both players. */
+#define SCROLL_CLICKS 4
+#define SCROLL_START  270
+#define SCROLL_PAUSE  250
+#define SCROLL_FAST   36000         /* degrees a second: 100 turns */
+
+static int32_t scroll_rows(uint32_t vel)
+{
+    uint64_t v = ((uint64_t)((1 << 16) / SCROLL_START) * vel) >> 12;
+    v = (v * v * v * v + (1 << 15)) >> 16;
+    return v > 1 ? (int32_t)v : 1;
+}
+
+int32_t arcade_scroll(struct arcade_scroll *s, int32_t clicks, uint32_t rate)
+{
+    uint32_t ms = 1000 / (rate ? rate : 30);
+    s->carry += clicks;
+    int32_t steps = s->carry / SCROLL_CLICKS;
+    s->carry -= steps * SCROLL_CLICKS;
+    if (!steps) {
+        if (s->quiet < SCROLL_PAUSE)
+            s->quiet += ms;
+        return 0;
+    }
+    int32_t dir = steps > 0 ? 1 : -1, n = steps * dir;
+    uint32_t span = s->quiet + ms;
+    int restart = dir != s->dir || span > SCROLL_PAUSE;
+    /* each step's speed, its clicks over its share of the time: 360
+     * degrees a turn of 96 clicks, by the ms */
+    uint32_t v = (uint32_t)n * SCROLL_CLICKS * 3750 / span;
+    if (v > SCROLL_FAST)
+        v = SCROLL_FAST;
+    int32_t rows = 0;
+    for (int32_t i = 0; i < n; i++) {
+        s->vel = (15 * s->vel + v) / 16;
+        if (!i && restart)
+            s->vel = 0;
+        rows += scroll_rows(s->vel);
+    }
+    s->dir = dir;
+    s->quiet = 0;
+    return rows * dir;
+}
+
 void arcade_input(struct vm *vm, unsigned held, int wheel, int wheelpos)
 {
     uint8_t pressed = 0;
@@ -34,9 +84,11 @@ void arcade_input(struct vm *vm, unsigned held, int wheel, int wheelpos)
         if (t == 1 || (t >= 16 && (t - 16) % 4 == 0))
             pressed |= (uint8_t)(1u << i);
     }
+    vm->released = (uint8_t)(vm->held & ~held);
     vm->held = (uint8_t)held;
     vm->pressed = pressed;
     vm->wheel = wheel;
+    vm->wheelsteps = arcade_scroll(&vm->scroll, wheel, vm->rate);
     vm->wheelpos = wheelpos < 0 || wheelpos > 95 ? -1 : wheelpos;
     /* no presses stamped unless the host follows the music this tick */
     vm->heard.jumped = 0;
@@ -68,11 +120,28 @@ static int button_arg(struct vm *vm, struct value *a, int argc, uint8_t bits,
 
 NATIVE(btn) { return button_arg(vm, a, argc, vm->held, "btn", out); }
 NATIVE(btnp) { return button_arg(vm, a, argc, vm->pressed, "btnp", out); }
+NATIVE(btnr) { return button_arg(vm, a, argc, vm->released, "btnr", out); }
+
+/* unitsnow(): the units this tick has spent so far, to scale an effect down
+ * on a slower player before it makes the tick late */
+NATIVE(unitsnow)
+{
+    (void)a; (void)argc;
+    *out = mk(T_INT, (int32_t)arcade_units_now(vm));
+    return 1;
+}
 
 NATIVE(wheel)
 {
     (void)a; (void)argc;
     *out = mk(T_INT, vm->wheel);
+    return 1;
+}
+
+NATIVE(wheelsteps)
+{
+    (void)a; (void)argc;
+    *out = mk(T_INT, vm->wheelsteps);
     return 1;
 }
 
@@ -274,6 +343,29 @@ NATIVE(playback_duck)
     return 1;
 }
 
+/* playback.volume(): the owner's volume, 0 to 100 of its range */
+NATIVE(playback_volume)
+{
+    (void)a; (void)argc;
+    const struct arcade_tracks *t = music_of(vm);
+    vm_charge(vm, 10);
+    return RET_INT(t && t->volume ? t->volume(vm->host->ctx, 0) : 0);
+}
+
+/* playback.adjust(n): the volume turned up (or, negative, down) n of the
+ * player's own steps, as the wheel turns it; where it is then, 0 to 100 */
+NATIVE(playback_adjust)
+{
+    (void)argc;
+    const struct arcade_tracks *t = music_of(vm);
+    if (!is_num(a[0]))
+        return vm_fail(vm, "playback.adjust() needs a number of steps", "", "");
+    int32_t n = floor_int(a[0]);
+    n = n < -100 ? -100 : n > 100 ? 100 : n;
+    vm_charge(vm, 10);
+    return RET_INT(t && t->volume ? t->volume(vm->host->ctx, n) : 0);
+}
+
 NATIVE(playback_play)
 {
     const struct arcade_tracks *t = music_of(vm);
@@ -302,17 +394,19 @@ NATIVE(playback_started)
     return RET_INT(t && t->started && t->started(vm->host->ctx));
 }
 
-/* A filter record ({ minlen, maxlen, genre, decade, music }, any field
- * left out) as the host takes it; genre's text in buf */
+/* A filter record ({ minlen, maxlen, genre, decade, music, artist }, any
+ * field left out) as the host takes it; genre's and artist's text in buf,
+ * half each */
 static int filter_of(struct vm *vm, struct value v, struct arcade_filter *f,
                      char *buf, uint32_t cap, const char *fn)
 {
+    uint32_t half = cap / 2;
     memset(f, 0, sizeof(*f));
     if (v.tag == T_NULL)
         return 1;
     if (v.tag != T_OBJ)
         return vm_fail(vm, fn, "() takes a filter record: { minlen, maxlen, "
-                       "genre, decade, music }", "");
+                       "genre, decade, music, artist }", "");
     struct value x;
     if (is_num(x = vm_get(vm, v, "minlen")))
         f->minlen = floor_int(x);
@@ -322,8 +416,13 @@ static int filter_of(struct vm *vm, struct value v, struct arcade_filter *f,
         f->decade = floor_int(x) / 10 * 10;
     f->music = vm_truthy(vm, vm_get(vm, v, "music"));
     if ((x = vm_get(vm, v, "genre")).tag == T_STR) {
-        buf[vm_text(vm, x, buf, cap - 1)] = '\0';
+        buf[vm_text(vm, x, buf, half - 1)] = '\0';
         f->genre = buf;
+    }
+    if ((x = vm_get(vm, v, "artist")).tag == T_STR) {
+        char *s = buf + half;
+        s[vm_text(vm, x, s, half - 1)] = '\0';
+        f->artist = s;
     }
     return 1;
 }
@@ -363,9 +462,9 @@ NATIVE(tracks_count)
 {
     const struct arcade_tracks *t = music_of(vm);
     struct arcade_filter f;
-    char genre[64];
-    if (!filter_of(vm, argc > 0 ? a[0] : mk(T_NULL, 0), &f, genre,
-                   sizeof(genre), "tracks.count"))
+    char text[128];
+    if (!filter_of(vm, argc > 0 ? a[0] : mk(T_NULL, 0), &f, text,
+                   sizeof(text), "tracks.count"))
         return 0;
     int32_t n = t && t->count ? t->count(vm->host->ctx, &f) : 0;
     if (!vm_spend(vm, walk_cost(vm, t)))
@@ -379,9 +478,9 @@ NATIVE(tracks_pick)
     (void)argc;
     const struct arcade_tracks *t = music_of(vm);
     struct arcade_filter f;
-    char genre[64];
+    char text[128];
     int32_t n = is_num(a[0]) ? floor_int(a[0]) : -1, *ids;
-    if (!filter_of(vm, a[1], &f, genre, sizeof(genre), "tracks.pick") ||
+    if (!filter_of(vm, a[1], &f, text, sizeof(text), "tracks.pick") ||
         !ids_out(vm, a[2], n, &ids, "tracks.pick"))
         return 0;
     int32_t k = t && t->pick && n ? t->pick(vm->host->ctx, n, &f, ids) : 0;
@@ -416,17 +515,38 @@ NATIVE(tracks_field)
     return 1;
 }
 
-/* tracks.near(id, n, out): up to n tracks most like id, into out */
+/* tracks.near(id, n, out, [sound]): up to n tracks most like id, into out;
+ * id a list of tracks, n for each in turn, -1 after the last of each */
 NATIVE(tracks_near)
 {
-    (void)argc;
     const struct arcade_tracks *t = music_of(vm);
     int32_t n = is_num(a[1]) ? floor_int(a[1]) : -1, *ids;
-    if (!is_num(a[0]) || !ids_out(vm, a[2], n, &ids, "tracks.near"))
+    int32_t ask[ARCADE_NEAR_IDS], count = 1;
+    int sound = argc > 3 && vm_truthy(vm, a[3]);
+    if (is_num(a[0])) {
+        ask[0] = floor_int(a[0]);
+    } else if (a[0].tag == T_I32 || a[0].tag == T_ARR) {
+        count = a[0].tag == T_I32 ? (int32_t)I32(vm, a[0])->len
+                                  : (int32_t)ARR(vm, a[0])->len;
+        if (count < 1 || count > ARCADE_NEAR_IDS)
+            return vm_fail(vm, "tracks.near() takes 1 to 10 tracks", "", "");
+        for (int32_t i = 0; i < count; i++) {
+            struct value v = a[0].tag == T_I32
+                ? mk(T_INT, I32(vm, a[0])->d[i])
+                : BUF(vm, ARR(vm, a[0])->buf)->v[i];
+            ask[i] = is_num(v) ? floor_int(v) : -1;
+        }
+    } else {
+        return vm_fail(vm, "tracks.near() needs a track, or a list of them",
+                       "", "");
+    }
+    if (n > ARCADE_NEAR_MAX)
+        n = ARCADE_NEAR_MAX;
+    if (!ids_out(vm, a[2], n < 0 ? -1 : n * count, &ids, "tracks.near"))
         return 0;
-    int32_t k = t && t->near && n ? t->near(vm->host->ctx, floor_int(a[0]),
-                                            n, ids) : 0;
-    ids_store(vm, a[2], ids, k);
+    int32_t k = t && t->near && n ? t->near(vm->host->ctx, ask, count, n,
+                                            sound, ids) : 0;
+    ids_store(vm, a[2], ids, count > 1 ? n * count : k);
     if (!vm_spend(vm, walk_cost(vm, t) + (uint32_t)k * 4))
         return 0;
     return RET_INT(k);
@@ -601,7 +721,27 @@ NATIVE(beat_press)
     if (!is_num(a[0]))
         return vm_fail(vm, "beat.press() needs a button", "", "");
     int32_t i = floor_int(a[0]);
-    return RET_INT((uint32_t)i < 5 ? vm->heard.press[i] : -1);
+    int32_t t = (uint32_t)i < 5 ? vm->heard.press[i] : -1;
+    if (t >= 0) {
+        t -= vm->beat_offset;
+        if (t < 0)
+            t = 0;
+    }
+    return RET_INT(t);
+}
+
+/* beat.offset([ms]): the cart's calibration, taken off every press
+ * beat.press() reports -- a player who presses 40 ms late on what they
+ * hear sets 40 -- from -500 to 500; the offset in force */
+NATIVE(beat_offset)
+{
+    if (argc > 0) {
+        if (!is_num(a[0]))
+            return vm_fail(vm, "beat.offset() takes ms", "", "");
+        int32_t ms = floor_int(a[0]);
+        vm->beat_offset = ms < -500 ? -500 : ms > 500 ? 500 : ms;
+    }
+    return RET_INT(vm->beat_offset);
 }
 
 NATIVE(beat_jumped)
@@ -753,6 +893,21 @@ NATIVE(skipped)
     (void)a; (void)argc;
     *out = mk(T_INT, (int32_t)vm->skipped);
     vm->skipped = 0;
+    return 1;
+}
+
+void arcade_paused(struct vm *vm)
+{
+    vm->paused = 1;
+}
+
+/* resumed(): whether the game was paused -- the pause menu, the hold
+ * switch -- since the last call */
+NATIVE(resumed)
+{
+    (void)a; (void)argc;
+    *out = mk(T_INT, vm->paused);
+    vm->paused = 0;
     return 1;
 }
 

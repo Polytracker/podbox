@@ -48,9 +48,10 @@ const char *vm_typename(uint32_t tag)
 {
     static const char *const names[] = {
         "null", "number", "string", "array", "Int32Array", "Uint8Array",
-        "record", "function", "buffer", "number", "image"
+        "record", "function", "buffer", "number", "image", "FixArray",
+        "lazy image not yet loaded with img.load()"
     };
-    return tag <= T_IMG ? names[tag] : "?";
+    return tag <= T_LAZY ? names[tag] : "?";
 }
 
 int vm_truthy(struct vm *vm, struct value v)
@@ -172,6 +173,15 @@ static void tw_join(struct vm *vm, struct tw *w, struct value v,
                 tw_put(w, sep, seplen);
             tw_put(w, num, decimal(a->d[i], num));
         }
+    } else if (v.tag == T_FXA) {
+        struct i32 *a = I32(vm, v);
+        char f[24];
+        w->seen += a->len;
+        for (uint32_t i = 0; i < a->len && !TW_DONE(w); i++) {
+            if (i)
+                tw_put(w, sep, seplen);
+            tw_put(w, f, fix_text(a->d[i], f));
+        }
     } else {
         struct u8a *a = U8A(vm, v);
         w->seen += a->len;
@@ -195,12 +205,12 @@ static void tw_value(struct vm *vm, struct tw *w, struct value v, int depth)
         break;
     }
     case T_STR: tw_put(w, STR(vm, v)->b, STR(vm, v)->len); break;
-    case T_ARR: case T_I32: case T_U8:
+    case T_ARR: case T_I32: case T_U8: case T_FXA:
         tw_join(vm, w, v, (const uint8_t *)",", 1, depth);
         break;
     case T_OBJ: tw_put(w, "[object Object]", 15); break;
     case T_FN: tw_put(w, "function", 8); break;
-    case T_IMG: tw_put(w, "[image]", 7); break;
+    case T_IMG: case T_LAZY: tw_put(w, "[image]", 7); break;
     }
 }
 
@@ -308,6 +318,11 @@ static int equal(struct vm *vm, struct value a, struct value b)
     }
     return a.v == b.v;
 }
+
+/* arcade_api.def's slots for the maths NCALL works inline, slots being
+ * permanent; natives.c checks them */
+enum { INLINE_FLR = 53, INLINE_ABS = 55, INLINE_MIN = 56, INLINE_MAX = 57,
+       INLINE_MID = 58, INLINE_SGN = 59 };
 
 /* ---- arrays and records --------------------------------------------- */
 
@@ -569,6 +584,10 @@ static int get_index(struct vm *vm, struct value c, struct value i,
             *out = k < I32(vm, c)->len ? mk(T_INT, I32(vm, c)->d[k])
                                        : mk(T_NULL, 0);
             return 1;
+        case T_FXA:
+            *out = k < I32(vm, c)->len ? mk(T_FIX, I32(vm, c)->d[k])
+                                       : mk(T_NULL, 0);
+            return 1;
         case T_U8:
             *out = k < U8A(vm, c)->len ? mk(T_INT, U8A(vm, c)->d[k])
                                        : mk(T_NULL, 0);
@@ -597,6 +616,194 @@ static int get_index(struct vm *vm, struct value c, struct value i,
                  vm_typename(i.tag), "");
 }
 
+/* c[i] inline, for the common case: an integer index in range of an
+ * array or a typed array. 0 leaves it to get_index(). The values are
+ * read where they lie, and out may be c itself: whole values copied
+ * into locals cost the interpreter a trip through its stack frame. */
+static inline int index_fast(struct vm *vm, const struct value *c,
+                             const struct value *i, struct value *out)
+{
+    if (i->tag != T_INT)
+        return 0;
+    uint32_t k = (uint32_t)i->v, t = c->tag;
+    void *o = MEM(vm, (uint32_t)c->v);
+    if (t == T_ARR && k < ((struct arr *)o)->len) {
+        const struct value *e = &BUF(vm, ((struct arr *)o)->buf)->v[k];
+        uint32_t et = e->tag;
+        int32_t ev = e->v;
+        out->tag = et;
+        out->v = ev;
+        return 1;
+    }
+    if ((t == T_I32 || t == T_FXA) && k < ((struct i32 *)o)->len) {
+        int32_t ev = ((struct i32 *)o)->d[k];
+        out->tag = t == T_I32 ? T_INT : T_FIX;
+        out->v = ev;
+        return 1;
+    }
+    if (t == T_U8 && k < ((struct u8a *)o)->len) {
+        int32_t ev = ((struct u8a *)o)->d[k];
+        out->tag = T_INT;
+        out->v = ev;
+        return 1;
+    }
+    return 0;
+}
+
+/* c[i] = v inline for an integer index in range of an array, an
+ * Int32Array or FixArray given a number, or a Uint8Array other than the
+ * screen's, which set_index() marks as drawn on. 0 leaves it to that. */
+static inline int store_fast(struct vm *vm, const struct value *c,
+                             const struct value *i, const struct value *v)
+{
+    if (i->tag != T_INT)
+        return 0;
+    uint32_t k = (uint32_t)i->v, t = c->tag;
+    void *o = MEM(vm, (uint32_t)c->v);
+    if (t == T_I32 && is_num(*v) && k < ((struct i32 *)o)->len) {
+        ((struct i32 *)o)->d[k] = to_int(*v);
+        return 1;
+    }
+    if (t == T_U8 && is_num(*v) && k < ((struct u8a *)o)->len &&
+        !IS_SCREEN(vm, *c)) {
+        ((struct u8a *)o)->d[k] = (uint8_t)to_int(*v);
+        return 1;
+    }
+    if (t == T_FXA && is_num(*v) && k < ((struct i32 *)o)->len) {
+        ((struct i32 *)o)->d[k] = to_fix(*v);
+        return 1;
+    }
+    if (t == T_ARR && k < ((struct arr *)o)->len) {
+        struct value *e = &BUF(vm, ((struct arr *)o)->buf)->v[k];
+        e->tag = v->tag;
+        e->v = v->v;
+        return 1;
+    }
+    return 0;
+}
+
+/* n / d, n below d << 32 so the quotient fits 32 bits: shift and
+ * subtract, a bit a step, which on the player is five instructions a bit
+ * -- its 64 by 64 divide, which the C compiles to, costs some 600 cycles
+ * against 170 on the rig */
+static uint32_t div_64_32(uint64_t n, uint32_t d)
+{
+    uint32_t hi = (uint32_t)(n >> 32), lo = (uint32_t)n;
+#ifdef ARCADE_ASM
+    /* lo shifts out into hi as the quotient's bits shift in: a carry out
+     * of hi, or hi reaching d, takes d off and sets the bit. Eight bits a
+     * pass, four passes: whole, the 32 would push vm.c's literals out of
+     * reach. */
+    uint32_t passes;
+    __asm__("mov   %2, #4\n"
+            "1:\n\t"
+            ".rept 8\n\t"
+            "adds  %0, %0, %0\n\t"
+            "adcs  %1, %1, %1\n\t"
+            "cmpcc %1, %3\n\t"
+            "subcs %1, %1, %3\n\t"
+            "orrcs %0, %0, #1\n\t"
+            ".endr\n\t"
+            "subs  %2, %2, #1\n\t"
+            "bne   1b"
+            : "+r"(lo), "+r"(hi), "=&r"(passes) : "r"(d) : "cc");
+    return lo;
+#else
+    uint32_t q = 0;
+    for (int i = 0; i < 32; i++) {
+        uint32_t top = hi >> 31;
+        hi = hi << 1 | lo >> 31;
+        lo <<= 1;
+        q <<= 1;
+        if (top || hi >= d) {
+            hi -= d;
+            q |= 1;
+        }
+    }
+    return q;
+#endif
+}
+
+/* a / b for two numbers not both integers, as vm_fix_op() works it --
+ * (a * 65536) / b in 16.16, toward 0 -- when b is not 0 and the quotient
+ * fits 32 bits: a fraction over an integer is a.v / b.v, the same
+ * quotient; 0 to leave it to vm_fix_op. Out of line: inside run() it
+ * would push the loop's literals out of a load's reach. */
+static __attribute__((noinline)) int div_fast(struct value *a,
+                                              const struct value *b)
+{
+    uint32_t ta = a->tag, tb = b->tag;
+    int32_t x = a->v, y = b->v;
+    if (!y)
+        return 0;
+    if (ta == T_FIX && tb == T_INT) {
+        a->v = y == -1 ? (int32_t)(0u - (uint32_t)x) : x / y;
+        return 1;
+    }
+    int64_t n = ta == T_FIX ? (int64_t)x << 16 : (int64_t)x << 32;
+    int64_t d = tb == T_FIX ? y : (int64_t)y << 16;
+    uint64_t un = n < 0 ? 0 - (uint64_t)n : (uint64_t)n;
+    uint64_t ud = d < 0 ? 0 - (uint64_t)d : (uint64_t)d;
+    if (ud >> 32 || (un >> 32) >= ud)
+        return 0;
+    uint32_t q = div_64_32(un, (uint32_t)ud);
+    a->v = (int32_t)((n < 0) != (d < 0) ? 0u - q : q);
+    a->tag = T_FIX;
+    return 1;
+}
+
+/* a + b, a - b or a * b in place of a, for two numbers not both
+ * integers, as vm_fix_op() works them but without the call; 0 for any
+ * other op or value, left to it */
+static inline int fix_fast(struct value *a, const struct value *b, int op)
+{
+    uint32_t ta = a->tag, tb = b->tag;
+    if ((ta != T_FIX && ta != T_INT) || (tb != T_FIX && tb != T_INT))
+        return 0;
+    if (op == OP_DIV)
+        return div_fast(a, b);
+    int32_t x = a->v, y = b->v;
+    if (op == OP_MUL) {
+        if (ta == T_INT || tb == T_INT)
+            a->v = (int32_t)((uint32_t)x * (uint32_t)y);
+        else
+            a->v = (int32_t)(((int64_t)x * y) >> 16);
+    } else if (op == OP_ADD || op == OP_SUB) {
+        uint32_t ux = ta == T_FIX ? (uint32_t)x : (uint32_t)x << 16;
+        uint32_t uy = tb == T_FIX ? (uint32_t)y : (uint32_t)y << 16;
+        a->v = (int32_t)(op == OP_ADD ? ux + uy : ux - uy);
+    } else
+        return 0;
+    a->tag = T_FIX;
+    return 1;
+}
+
+/* a < b and the rest for anything but two integers, kept out of the
+ * interpreter's loop so its fast path takes no copies: 1 or 0, or -1
+ * with the error set */
+static int compare_slow(struct vm *vm, const struct value *pa,
+                        const struct value *pb, int op)
+{
+    struct value a = *pa, b = *pb;
+    int c;
+    if (is_num(a) && is_num(b)) {
+        int64_t x = scaled(a), y = scaled(b);
+        c = x < y ? -1 : x > y;
+    } else if (a.tag == T_STR && b.tag == T_STR)
+        c = str_cmp(vm, a, b);
+    else {
+        vm_fail(vm, "a comparison needs two numbers or two strings, not a ",
+                vm_typename(is_num(a) || a.tag == T_STR ? b.tag : a.tag), "");
+        return -1;
+    }
+    switch (op) {
+    case 0: return c < 0;
+    case 1: return c <= 0;
+    case 2: return c > 0;
+    default: return c >= 0;
+    }
+}
+
 /* c, i and v stay on the stack, so growth may allocate. */
 static int set_index(struct vm *vm, struct value c, struct value i,
                      struct value v)
@@ -620,11 +827,14 @@ static int set_index(struct vm *vm, struct value c, struct value i,
         }
         case T_I32:
         case T_U8:
+        case T_FXA:
             if (!is_num(v))
                 return vm_fail(vm, "a typed array holds numbers, not a ",
                                vm_typename(v.tag), "");
             if (c.tag == T_I32 && k < I32(vm, c)->len)
                 I32(vm, c)->d[k] = to_int(v);
+            else if (c.tag == T_FXA && k < I32(vm, c)->len)
+                I32(vm, c)->d[k] = to_fix(v);
             else if (c.tag == T_U8 && k < U8A(vm, c)->len) {
                 U8A(vm, c)->d[k] = (uint8_t)to_int(v);
                 if (IS_SCREEN(vm, c))
@@ -675,9 +885,11 @@ static int method(struct vm *vm, int m, struct value *r, struct value *a,
     struct value self = *r, out = mk(T_NULL, 0);
     uint32_t work = 0;              /* bytes moved or made, charged after */
     int is_arr = self.tag == T_ARR, is_str = self.tag == T_STR;
+    /* positions and counts are whole; splice's values from the third on
+     * are what it inserts, kept as they are */
     if (m == M_splice || m == M_slice || m == M_charCodeAt ||
         m == M_substring)
-        for (int k = 0; k < argc; k++)
+        for (int k = 0; k < argc && (m != M_splice || k < 2); k++)
             if (a[k].tag == T_FIX)
                 a[k] = mk(T_INT, to_int(a[k]));
     switch (m) {
@@ -804,7 +1016,7 @@ static int method(struct vm *vm, int m, struct value *r, struct value *a,
         int32_t found = -1, len;
         if (is_arr)
             len = (int32_t)ARR(vm, self)->len;
-        else if (self.tag == T_I32)
+        else if (self.tag == T_I32 || self.tag == T_FXA)
             len = (int32_t)I32(vm, self)->len;
         else if (self.tag == T_U8)
             len = (int32_t)U8A(vm, self)->len;
@@ -833,6 +1045,14 @@ static int method(struct vm *vm, int m, struct value *r, struct value *a,
                 if (equal(vm, v[i], a[0]))
                     found = i;
             work = (uint32_t)len * 4;
+        } else if (self.tag == T_FXA) {
+            if (is_num(a[0])) {
+                int32_t want = to_fix(a[0]);
+                for (int32_t i = from; i >= 0 && i < len && found < 0; i += step)
+                    if (I32(vm, self)->d[i] == want)
+                        found = i;
+                work = (uint32_t)len * 4;
+            }
         } else if (self.tag == T_I32 || self.tag == T_U8) {
             if (a[0].tag == T_INT) {
                 for (int32_t i = from; i >= 0 && i < len && found < 0; i += step) {
@@ -869,7 +1089,8 @@ static int method(struct vm *vm, int m, struct value *r, struct value *a,
         break;
     }
     case M_join: {
-        if (!is_arr && self.tag != T_I32 && self.tag != T_U8)
+        if (!is_arr && self.tag != T_I32 && self.tag != T_U8 &&
+            self.tag != T_FXA)
             return vm_fail(vm, ".join() needs an array, not a ",
                            vm_typename(self.tag), "");
         const uint8_t *sep = (const uint8_t *)",";
@@ -903,7 +1124,7 @@ static int method(struct vm *vm, int m, struct value *r, struct value *a,
             for (i = 0; i < n / 2; i++) {
                 t = v[i]; v[i] = v[n - 1 - i]; v[n - 1 - i] = t;
             }
-        } else if (self.tag == T_I32) {
+        } else if (self.tag == T_I32 || self.tag == T_FXA) {
             n = I32(vm, self)->len;
             int32_t *d = I32(vm, self)->d, t;
             for (i = 0; i < n / 2; i++) {
@@ -1452,6 +1673,10 @@ op_ADD:
         sp--;
         NEXT();
     }
+    if (fix_fast(&sp[-2], &sp[-1], OP_ADD)) {
+        sp--;
+        NEXT();
+    }
     a = sp[-2]; b = sp[-1];
     if (is_num(a) && is_num(b)) {
         vm_fix_op(vm, OP_ADD, a, b, &sp[-2]);
@@ -1468,6 +1693,26 @@ op_ADD:
     sp--;
     NEXT();
 
+/* units on top of an op's own, from the budget: as vm_charge() takes them
+ * when the slice has fewer left, so it still ends where it should */
+#define EXTRA(n) do { \
+    if (budget > (n)) \
+        budget -= (n); \
+    else { \
+        SYNC(); \
+        vm_charge(vm, (n)); \
+        RELOAD(); \
+    } \
+} while (0)
+
+/* What a divide or remainder with a fraction costs beyond its op,
+ * measured on the rig (cal, vmbench): about 440 cycles a divide, and a
+ * 64-bit remainder some 600 */
+#define FIXCOST_SUB 0
+#define FIXCOST_MUL 0
+#define FIXCOST_DIV 9
+#define FIXCOST_MOD 13
+
 /* Arithmetic: integers inline, anything with a fraction through
  * vm_fix_op, anything else an error. */
 #define ARITH(name, what, expr) \
@@ -1478,6 +1723,12 @@ op_##name: \
         sp--; \
         NEXT(); \
     } \
+    if (fix_fast(&sp[-2], &sp[-1], OP_##name)) { \
+        sp--; \
+        if (FIXCOST_##name) \
+            EXTRA(FIXCOST_##name); \
+        NEXT(); \
+    } \
     a = sp[-2]; b = sp[-1]; \
     if (!is_num(a) || !is_num(b)) \
         FAIL(what " needs numbers, not a ", \
@@ -1485,6 +1736,8 @@ op_##name: \
     if (!vm_fix_op(vm, OP_##name, a, b, &sp[-2])) \
         goto fail; \
     sp--; \
+    if (FIXCOST_##name) \
+        EXTRA(FIXCOST_##name); \
     NEXT();
 
 ARITH(SUB, "-", sp[-2].v = (int32_t)((uint32_t)av - (uint32_t)bv))
@@ -1530,10 +1783,13 @@ op_BNOT:
         FAIL("~ needs a number, not a ", vm_typename(sp[-1].tag));
     sp[-1] = mk(T_INT, ~to_int(sp[-1]));
     NEXT();
-/* Strings are compared at a charge for their length, so the registers go
+/* Two of one kind but different strings are equal by their place alone;
+ * strings are compared at a charge for their length, so the registers go
  * over for them */
 #define EQUAL(x, y, r) do { \
-    if ((x).tag == T_STR && (y).tag == T_STR) { \
+    if ((x).tag == (y).tag && ((x).tag != T_STR || (x).v == (y).v)) \
+        r = (x).v == (y).v; \
+    else if ((x).tag == T_STR && (y).tag == T_STR) { \
         SYNC(); \
         r = equal(vm, x, y); \
         RELOAD(); \
@@ -1576,7 +1832,7 @@ COMPARE(GT, >, ">")
 COMPARE(GE, >=, ">=")
 
 /* Compare and jump: integers inline, then fractions, then strings. */
-#define JCOMPARE(name, op) \
+#define JCOMPARE(name, op, k) \
 op_##name: { \
     int32_t off = S16(); \
     sp -= 2; \
@@ -1585,25 +1841,43 @@ op_##name: { \
             pc += off; \
         NEXT(); \
     } \
-    a = sp[0]; b = sp[1]; \
-    int hold; \
-    if (is_num(a) && is_num(b)) \
-        hold = scaled(a) op scaled(b); \
-    else if (a.tag == T_STR && b.tag == T_STR) { \
-        SYNC(); \
-        hold = str_cmp(vm, a, b) op 0; \
-        RELOAD(); \
-    } else \
-        FAIL("a comparison needs two numbers or two strings, not a ", \
-             vm_typename(is_num(a) || a.tag == T_STR ? b.tag : a.tag)); \
+    SYNC(); \
+    int hold = compare_slow(vm, &sp[0], &sp[1], k); \
+    RELOAD(); \
+    if (hold < 0) \
+        goto fail; \
     if (hold) \
         pc += off; \
     NEXT(); \
 }
-JCOMPARE(JLT, <)
-JCOMPARE(JLE, <=)
-JCOMPARE(JGT, >)
-JCOMPARE(JGE, >=)
+JCOMPARE(JLT, <, 0)
+JCOMPARE(JLE, <=, 1)
+JCOMPARE(JGT, >, 2)
+JCOMPARE(JGE, >=, 3)
+
+/* A local against a small integer, and jump: LDL, PUSHI8 and a JCOMPARE */
+#define JCOMPARE_LI(name, op) \
+op_##name: { \
+    a = lp[U8()]; \
+    int32_t k = S8(); \
+    int32_t off = S16(); \
+    if (a.tag == T_INT) { \
+        if (a.v op k) \
+            pc += off; \
+        NEXT(); \
+    } \
+    b = mk(T_INT, k); \
+    if (!is_num(a)) \
+        FAIL("a comparison needs two numbers or two strings, not a ", \
+             vm_typename(a.tag == T_STR ? b.tag : a.tag)); \
+    if (scaled(a) op scaled(b)) \
+        pc += off; \
+    NEXT(); \
+}
+JCOMPARE_LI(JLTLI, <)
+JCOMPARE_LI(JLELI, <=)
+JCOMPARE_LI(JGTLI, >)
+JCOMPARE_LI(JGELI, >=)
 
 op_JEQ:
 op_JNE: {
@@ -1660,12 +1934,28 @@ op_ORJ: {
     NEXT();
 }
 
-op_CALL:
+op_CALL: {
+    /* as enter() does it, but with the arguments the arity always, so
+     * none to pad or drop, and without the call */
     n = U16();
+    const struct fninfo *f = &vm->fns[n];
     SYNC();
-    if (!enter(vm, n, vm->fns[n].arity, 0))
-        goto fail;
-    goto entered;
+    if (vm->nframes >= MAX_FRAMES ||
+        (uint32_t)(sp - vm->stack) + f->nlocals + f->maxstack + STACK_SLACK >
+        STACK_VALUES)
+        FAIL("too much recursion", "");
+    fr = &vm->frames[vm->nframes++];
+    fr->fn = n;
+    fr->bp = (uint32_t)(sp - f->arity - vm->stack);
+    fr->drop = 0;
+    fr->pc = f->off;
+    for (uint32_t i = f->arity; i < f->nlocals; i++)
+        *sp++ = mk(T_NULL, 0);
+    vm->sp = sp;
+    pc = code + f->off;
+    lp = vm->stack + fr->bp;
+    NEXT();
+}
 op_CALLV:
     n = U8();
     if (sp[-(int)n - 1].tag != T_FN)
@@ -1673,7 +1963,6 @@ op_CALLV:
     SYNC();
     if (!enter(vm, (uint32_t)sp[-(int)n - 1].v, n, 1))
         goto fail;
-entered:
     fr = &vm->frames[vm->nframes - 1];
     pc = code + fr->pc;
     lp = vm->stack + fr->bp;
@@ -1701,6 +1990,55 @@ leave:
 
 op_NCALL: {
     uint32_t slot = U16(), argc = U8();
+    /* the small maths given numbers, as core_math.c works them, without
+     * the call: about 105 cycles round 25 on the rig. Anything else goes
+     * to the native, which reports it. */
+    switch (slot) {
+    case INLINE_FLR:
+        if (is_num(sp[-1])) {
+            sp[-1] = mk(T_INT, floor_int(sp[-1]));
+            NEXT();
+        }
+        break;
+    case INLINE_ABS:
+        if (is_num(sp[-1])) {
+            if (sp[-1].v < 0)
+                sp[-1].v = (int32_t)(0u - (uint32_t)sp[-1].v);
+            NEXT();
+        }
+        break;
+    case INLINE_MIN:
+    case INLINE_MAX:
+        if (is_num(sp[-2]) && is_num(sp[-1])) {
+            int64_t x = scaled(sp[-2]), y = scaled(sp[-1]);
+            if (slot == INLINE_MIN ? y < x : y > x)
+                sp[-2] = sp[-1];
+            sp--;
+            NEXT();
+        }
+        break;
+    case INLINE_MID:
+        if (is_num(sp[-3]) && is_num(sp[-2]) && is_num(sp[-1])) {
+            struct value x = sp[-3], y = sp[-2], z = sp[-1], t;
+            if (scaled(x) > scaled(y)) {
+                t = x;
+                x = y;
+                y = t;
+            }
+            if (scaled(y) > scaled(z))
+                y = z;
+            sp[-3] = scaled(x) > scaled(y) ? x : y;
+            sp -= 2;
+            NEXT();
+        }
+        break;
+    case INLINE_SGN:
+        if (is_num(sp[-1])) {
+            sp[-1] = mk(T_INT, sp[-1].v < 0 ? -1 : 1);
+            NEXT();
+        }
+        break;
+    }
     struct value out = mk(T_NULL, 0);
     int32_t outer = vm->native;
     SYNC();
@@ -1728,23 +2066,26 @@ op_NEWARR: {
     NEXT();
 }
 op_NEWI32:
+op_NEWFXA:
 op_NEWU8: {
-    int is32 = pc[-1] == OP_NEWI32;
+    int is32 = pc[-1] != OP_NEWU8;
+    uint32_t kind = pc[-1] == OP_NEWI32 ? T_I32 : is32 ? T_FXA : T_U8;
     if (!is_num(sp[-1]) || to_int(sp[-1]) < 0)
-        FAIL(is32 ? "new Int32Array() needs a length, not a "
-                  : "new Uint8Array() needs a length, not a ",
+        FAIL(kind == T_I32 ? "new Int32Array() needs a length, not a "
+             : kind == T_FXA ? "new FixArray() needs a length, not a "
+                             : "new Uint8Array() needs a length, not a ",
              is_num(sp[-1]) ? "negative number" : vm_typename(sp[-1].tag));
     n = (uint32_t)to_int(sp[-1]);
     if (n > (vm->heap_hi - vm->heap_lo) / (is32 ? 4 : 1))
         FAIL("out of memory", "");
     SYNC();
-    uint32_t off = gc_alloc(vm, is32 ? T_I32 : T_U8,
+    uint32_t off = gc_alloc(vm, kind,
                             (uint32_t)(sizeof(struct i32) - sizeof(struct hdr))
                             + n * (is32 ? 4 : 1));
     if (!off)
         goto fail;
     ((struct i32 *)MEM(vm, off))->len = n;
-    sp[-1] = mk(is32 ? T_I32 : T_U8, (int32_t)off);
+    sp[-1] = mk(kind, (int32_t)off);
     /* cleared at the speed of memory */
     vm_charge(vm, n * (is32 ? 4 : 1) / BYTES_PER_UNIT);
     RELOAD();
@@ -1762,18 +2103,34 @@ op_NEWOBJ: {
     NEXT();
 }
 op_GETIDX: {
-    struct value got;
-    SYNC();
-    if (!get_index(vm, sp[-2], sp[-1], &got))
-        goto fail;
-    sp[-2] = got;
+    if (!index_fast(vm, &sp[-2], &sp[-1], &sp[-2])) {
+        struct value got;
+        SYNC();
+        if (!get_index(vm, sp[-2], sp[-1], &got))
+            goto fail;
+        sp[-2] = got;
+    }
     sp--;
     NEXT();
 }
+op_GETGL: {
+    const struct value *c = &vm->globals[U16()], *i = &lp[U8()];
+    if (!index_fast(vm, c, i, sp)) {
+        struct value got;
+        SYNC();
+        if (!get_index(vm, *c, *i, &got))
+            goto fail;
+        *sp = got;
+    }
+    sp++;
+    NEXT();
+}
 op_SETIDX:
-    SYNC();
-    if (!set_index(vm, sp[-3], sp[-2], sp[-1]))
-        goto fail;
+    if (!store_fast(vm, &sp[-3], &sp[-2], &sp[-1])) {
+        SYNC();
+        if (!set_index(vm, sp[-3], sp[-2], sp[-1]))
+            goto fail;
+    }
     sp -= 3;
     NEXT();
 op_GETPROP: {
@@ -1782,7 +2139,26 @@ op_GETPROP: {
         no_field(vm, "can't read .", sp[-1], key);
         goto fail;
     }
-    sp[-1] = obj_get(vm, sp[-1], key, site);
+    /* the cache's hit here, without the call */
+    struct obj *ob = OBJ(vm, sp[-1]);
+    if (vm->ic[site].shape == ob->shape)
+        sp[-1] = BUF(vm, ob->buf)->v[vm->ic[site].slot];
+    else
+        sp[-1] = obj_get(vm, sp[-1], key, site);
+    NEXT();
+}
+op_GETGP: {
+    struct value o = vm->globals[U16()];
+    uint32_t key = U16(), site = U16();
+    if (o.tag != T_OBJ) {
+        no_field(vm, "can't read .", o, key);
+        goto fail;
+    }
+    struct obj *ob = OBJ(vm, o);
+    if (vm->ic[site].shape == ob->shape)
+        *sp++ = BUF(vm, ob->buf)->v[vm->ic[site].slot];
+    else
+        *sp++ = obj_get(vm, o, key, site);
     NEXT();
 }
 op_SETPROP: {
@@ -1790,6 +2166,15 @@ op_SETPROP: {
     if (sp[-2].tag != T_OBJ) {
         no_field(vm, "can't set .", sp[-2], key);
         goto fail;
+    }
+    /* the cache's hit here, without the call */
+    struct obj *ob = OBJ(vm, sp[-2]);
+    if (vm->ic[site].shape == ob->shape) {
+        struct value *e = &BUF(vm, ob->buf)->v[vm->ic[site].slot];
+        e->tag = sp[-1].tag;
+        e->v = sp[-1].v;
+        sp -= 2;
+        NEXT();
     }
     SYNC();
     if (!obj_set(vm, sp[-2], key, site, sp[-1]))
@@ -1802,7 +2187,7 @@ op_LEN:
     switch (a.tag) {
     case T_STR: n = STR(vm, a)->len; break;
     case T_ARR: n = ARR(vm, a)->len; break;
-    case T_I32: n = I32(vm, a)->len; break;
+    case T_I32: case T_FXA: n = I32(vm, a)->len; break;
     case T_U8: n = U8A(vm, a)->len; break;
     default: FAIL(".length of a ", vm_typename(a.tag));
     }
@@ -1888,17 +2273,38 @@ int arcade_menu_choose(struct vm *vm, int i, int button)
     return vm_truthy(vm, r) ? 1 : 0;
 }
 
-int arcade_start(struct vm *vm)
+/* init() may run this many times a tick's ceiling: a cart's one-off
+ * setup -- a generated world, a big noise.fill -- is not a hung loop */
+#define INIT_CEILINGS 4
+
+int arcade_end(struct vm *vm)
 {
+    if (vm->err || vm->entry[4] == NONE)
+        return !vm->err;
     begin(vm);
-    int ok = call_entry(vm, 0) && call_entry(vm, 1);
+    int ok = call_entry(vm, 4);
     end(vm);
     return ok;
 }
 
+int arcade_start(struct vm *vm)
+{
+    uint32_t tick_ceiling = vm->ceiling;
+    uint32_t setup = tick_ceiling <= 0xffffffffu / INIT_CEILINGS
+                     ? tick_ceiling * INIT_CEILINGS : 0xffffffffu;
+    vm->ceiling = setup;
+    begin(vm);
+    int ok = call_entry(vm, 0) && call_entry(vm, 1);
+    end(vm);
+    /* back to a tick's, unless the host lowered it meanwhile (to stop
+     * a call running too long by the clock) */
+    if (vm->ceiling == setup)
+        vm->ceiling = tick_ceiling;
+    return ok;
+}
+
 /* The beat analyser's work while a cart listens to the music: about a
- * third of the 5G's time playing (Spike's measurement), at 1.6 us a unit
- * there (spec section 2). It runs in the player's game thread between
+ * third of the 5G's time playing, at 1.6 us a unit there. It runs in the player's game thread between
  * ticks, so a tick reports it with the cart's own units -- the cost the
  * IDE's meter shows -- though it counts nothing toward the ceiling. */
 #define ANALYSER_UNITS_PER_SECOND 208000
@@ -1907,7 +2313,9 @@ int arcade_tick(struct vm *vm, int draw)
 {
     begin(vm);
     vm->frame++;
-    vm->opt_changed = vm->opt_pending;
+    /* the first tick reports the options as changed, so a cart reads them
+     * where it reads a change */
+    vm->opt_changed = vm->opt_pending || vm->frame == 1;
     vm->opt_pending = 0;
     int ok = call_entry(vm, 2) && (!draw || call_entry(vm, 3));
     vm->opt_changed = 0;
@@ -1935,7 +2343,7 @@ int vm_out_ok(struct vm *vm, struct value o, uint32_t need)
 {
     if (o.tag == T_ARR)
         return ARR(vm, o)->len >= need;
-    if (o.tag == T_I32)
+    if (o.tag == T_I32 || o.tag == T_FXA)
         return I32(vm, o)->len >= need;
     return 0;
 }
@@ -1944,6 +2352,8 @@ void vm_out_set(struct vm *vm, struct value o, uint32_t i, struct value v)
 {
     if (o.tag == T_ARR)
         BUF(vm, ARR(vm, o)->buf)->v[i] = v;
+    else if (o.tag == T_FXA)
+        I32(vm, o)->d[i] = to_fix(v);
     else
         I32(vm, o)->d[i] = v.tag == T_FIX ? v.v >> 16 : v.v;
 }
@@ -1988,6 +2398,16 @@ uint32_t arcade_cart_hash(const struct vm *vm)
 int arcade_owns_music(const struct vm *vm)
 {
     return vm->music == 2;
+}
+
+int arcade_suspends(const struct vm *vm)
+{
+    return !vm->no_suspend;
+}
+
+int arcade_between_calls(const struct vm *vm)
+{
+    return !vm->err && vm->nframes == 0;
 }
 
 struct vm *arcade_resume(void *mem, uint32_t size,

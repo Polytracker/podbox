@@ -354,6 +354,12 @@ static struct usb_class_driver_ep_allocation ep_allocs[2] = {
 bool alloc_failed = false;
 bool usb_audio_playing = false;
 int tmp_saved_vol;
+/* the host has muted the player: tmp_saved_vol is what unmuting restores */
+static bool host_muted;
+/* The stream holds a boost: unboosted, a sleeping 5G LCD drops the CPU to
+ * 24 MHz, too slow to take every packet. */
+static bool stream_boosted;
+static unsigned int dsp_claims;
 
 /* buffers used for usb, queuing and playback */
 static unsigned char *rx_buffer;
@@ -725,6 +731,23 @@ static void playback_audio_get_more(const void **start, size_t *size)
 
 static void usb_audio_start_playback(void)
 {
+    if (!stream_boosted)
+    {
+        cpu_boost(true);
+        stream_boosted = true;
+    }
+    /* The playback DSP is set up here, not at connect: until the audio
+     * thread has stopped, music still being decoded through it plays as
+     * static once it expects our format. */
+    dsp = dsp_get_config(CODEC_IDX_AUDIO);
+    dsp_claims++;
+    dsp_configure(dsp, DSP_RESET, 0);
+    dsp_configure(dsp, DSP_SET_STEREO_MODE, STEREO_INTERLEAVED);
+    dsp_configure(dsp, DSP_SET_SAMPLE_DEPTH, 16);
+#ifdef HAVE_PITCHCONTROL
+    sound_set_pitch(PITCH_SPEED_100);
+    dsp_set_timestretch(PITCH_SPEED_100);
+#endif
     usb_audio_playing = true;
     usb_rx_overflow = false;
     playback_audio_underflow = true;
@@ -773,6 +796,11 @@ static void usb_audio_stop_playback(void)
     {
         mixer_channel_stop(PCM_MIXER_CHAN_USBAUDIO);
         usb_audio_playing = false;
+    }
+    if (stream_boosted)
+    {
+        cpu_boost(false);
+        stream_boosted = false;
     }
     send_fb = false;
     /* The transfer queued for the next packet stays primed when the host
@@ -944,6 +972,7 @@ static bool feature_unit_set_mute(int value, uint8_t cmd)
     {
         logf("usbaudio: mute !");
         tmp_saved_vol = sound_current(SOUND_VOLUME);
+        host_muted = true;
 
         // setvol does range checking for us!
         global_status.volume = sound_min(SOUND_VOLUME);
@@ -953,6 +982,7 @@ static bool feature_unit_set_mute(int value, uint8_t cmd)
     else if(value == 0)
     {
         logf("usbaudio: not muted !");
+        host_muted = false;
 
         // setvol does range checking for us!
         global_status.volume = tmp_saved_vol;
@@ -1206,8 +1236,7 @@ static bool usb_audio_control_request(struct usb_ctrlrequest* req, uint8_t* reqd
 
 /*
  * Called by usb_core_do_set_config() when the
- * connection is ready to be used. Resets the DSP and
- * reapplies the sample rate.
+ * connection is ready to be used. Reapplies the sample rate.
  */
 static int usb_audio_init_connection(void)
 {
@@ -1223,15 +1252,6 @@ static int usb_audio_init_connection(void)
     }
 
     usbaudio_active = true;
-    dsp = dsp_get_config(CODEC_IDX_AUDIO);
-    dsp_configure(dsp, DSP_RESET, 0);
-    dsp_configure(dsp, DSP_SET_STEREO_MODE, STEREO_INTERLEAVED);
-    dsp_configure(dsp, DSP_SET_SAMPLE_DEPTH, 16);
-#ifdef HAVE_PITCHCONTROL
-    sound_set_pitch(PITCH_SPEED_100);
-    dsp_set_timestretch(PITCH_SPEED_100);
-#endif
-
     usb_as_playback_intf_alt = 0;
     /* Windows' recovery from a bus reset restores the configuration and the
      * streaming alternate but never resends the rate, so the rate it last
@@ -1239,6 +1259,7 @@ static int usb_audio_init_connection(void)
     set_playback_sampling_frequency(
         usb_audio_get_playback_sampling_frequency());
     tmp_saved_vol = sound_current(SOUND_VOLUME);
+    host_muted = false;
     usb_audio_playing = false;
     return 0;
 }
@@ -1260,9 +1281,29 @@ static void usb_audio_disconnect(void)
     usbaudio_active = false;
 }
 
+unsigned int usb_audio_get_dsp_claims(void)
+{
+    return dsp_claims;
+}
+
 bool usb_audio_get_active(void)
 {
     return usbaudio_active;
+}
+
+bool usb_audio_get_muted(void)
+{
+    return host_muted;
+}
+
+int usb_audio_get_unmute_volume(void)
+{
+    return tmp_saved_vol;
+}
+
+void usb_audio_set_unmute_volume(int vol)
+{
+    tmp_saved_vol = vol;
 }
 
 bool usb_audio_get_alloc_failed(void)

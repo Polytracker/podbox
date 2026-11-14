@@ -11,14 +11,15 @@
  * A dialog is a prompt, wrapped to the box, over its controls: OK; Yes and
  * No; a list; a number; or the player's text line -- the wheel puts a
  * character in at the caret and turns it, Left and Right keep it and move,
- * held they delete, SELECT goes to OK and Cancel. MENU backs out. Text
+ * held they delete, SELECT takes it, PLAY goes to OK and Cancel. MENU
+ * backs out of those to the line, and from the line out. Text
  * the cart's font cannot draw -- a translation in FONT.CAPS -- is shown in
  * FONT.WORLD at the same size.
  *
  * The host also asks through it (the resume question) and lays the
  * achievement banner over the game's top rows with it.
  *
- * tools/arcade/lib/gui.js draws the same pieces for a cart's own screens,
+ * arcade/sdk/lib/gui.js draws the same pieces for a cart's own screens,
  * and a test checks the two give the same pixels: change the drawing here
  * and change it there.
  *
@@ -55,8 +56,8 @@
 #define INNER_W    (BOX_X1 - BOX_X0 + 1 - 2 * PAD)
 #define MARGIN     4
 
-/* Wheel clicks to a step: a row, a button, a number, a character */
-#define CLICKS_ROW  8
+/* Wheel clicks to a step of a number or a character; rows and buttons move
+ * as the player's lists do, by arcade_scroll() */
 #define CLICKS_CHAR 6
 
 /* The wheel's cycle when the cart's font is FONT.CAPS, and the English of
@@ -84,6 +85,7 @@ struct dialog
     /* input */
     unsigned held;
     int acc, hold_prev, hold_next;
+    struct arcade_scroll scroll;    /* the wheel, as a list takes it */
 };
 
 /* ---- text in ------------------------------------------------------------- */
@@ -125,35 +127,6 @@ static uint32_t next_cp(const char *s, uint32_t *i)
     return cp;
 }
 
-static int cp_bytes(uint32_t cp)
-{
-    return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
-}
-
-static int put_cp(char *d, uint32_t cp)
-{
-    if (cp < 0x80) {
-        d[0] = (char)cp;
-        return 1;
-    }
-    if (cp < 0x800) {
-        d[0] = (char)(0xc0 | cp >> 6);
-        d[1] = (char)(0x80 | (cp & 63));
-        return 2;
-    }
-    if (cp < 0x10000) {
-        d[0] = (char)(0xe0 | cp >> 12);
-        d[1] = (char)(0x80 | ((cp >> 6) & 63));
-        d[2] = (char)(0x80 | (cp & 63));
-        return 3;
-    }
-    d[0] = (char)(0xf0 | cp >> 18);
-    d[1] = (char)(0x80 | ((cp >> 12) & 63));
-    d[2] = (char)(0x80 | ((cp >> 6) & 63));
-    d[3] = (char)(0x80 | (cp & 63));
-    return 4;
-}
-
 /* The wheel's characters: the plain set in FONT.CAPS, which draws no
  * others; the owner's language's in FONT.WORLD. Space is always in it. */
 static void cycle_make(struct vm *vm)
@@ -181,7 +154,7 @@ static int line_bytes(const struct dialog *g)
 {
     int n = 0;
     for (int i = 0; i < g->len; i++)
-        n += cp_bytes(g->line[i]);
+        n += utf8_bytes(g->line[i]);
     return n;
 }
 
@@ -196,7 +169,7 @@ static void line_text(const struct dialog *g, char *d, int trim)
             b--;
     }
     for (int i = a; i < b; i++)
-        n += put_cp(d + n, g->line[i]);
+        n += utf8_put(d + n, g->line[i]);
     d[n] = 0;
 }
 
@@ -220,10 +193,10 @@ static void line_turn(struct dialog *g, int dir)
         idx++;
     if (idx == cycle_len)
         idx = 0;
-    int room = g->most - line_bytes(g) + cp_bytes(*c);
+    int room = g->most - line_bytes(g) + utf8_bytes(*c);
     for (int tries = 0; tries < cycle_len; tries++) {
         idx = ((idx + dir) % cycle_len + cycle_len) % cycle_len;
-        if (cp_bytes(cycle[idx]) <= room)
+        if (utf8_bytes(cycle[idx]) <= room)
             break;
     }
     *c = cycle[idx];
@@ -297,7 +270,7 @@ static void lay_out(struct vm *vm, struct dialog *g)
         break;
     }
     case ARCADE_DIALOG_NUMBER:
-        g->controls = (vm->d.font_big ? l : 2 * l) + 2;
+        g->controls = l + 2;
         break;
     case ARCADE_DIALOG_TEXT:
         g->controls = l + 4 + l / 2 + row;
@@ -397,11 +370,8 @@ static void draw_number(struct vm *vm, struct dialog *g, int32_t y)
         num[n++] = '-';
     while (k)
         num[n++] = rev[--k];
-    uint8_t big = vm->d.font_big;
-    vm->d.font_big = 1;
     int32_t w = text_width(vm, num, (uint32_t)n);
     draw_text(vm, num, (uint32_t)n, (SCREEN_W - w) / 2, y + 1, vm->ui_hi);
-    vm->d.font_big = big;
 }
 
 static void draw_line(struct vm *vm, struct dialog *g, int32_t y)
@@ -417,7 +387,7 @@ static void draw_line(struct vm *vm, struct dialog *g, int32_t y)
     for (int i = 0; i < g->len; i++) {
         if (i == g->caret - 1)
             mark_at = n;
-        n += put_cp(t + n, g->line[i]);
+        n += utf8_put(t + n, g->line[i]);
         if (i == g->caret - 1)
             caret_at = n;
     }
@@ -517,6 +487,11 @@ static int steps(struct dialog *g, int wheel, int per)
     return s;
 }
 
+static int wheel_rows(struct vm *vm, struct dialog *g, int wheel)
+{
+    return arcade_scroll(&g->scroll, wheel, vm->rate);
+}
+
 static void say(struct vm *vm, const char *text, int queue)
 {
     const struct arcade_speak *sp = vm->host->speak;
@@ -556,7 +531,7 @@ static void say_choice(struct vm *vm, struct dialog *g, int queue)
         if (g->focus)
             say(vm, word(vm, g->at ? "Cancel" : "OK"), queue);
         else if (g->editing) {
-            buf[put_cp(buf, g->line[g->caret - 1])] = 0;
+            buf[utf8_put(buf, g->line[g->caret - 1])] = 0;
             say(vm, buf, queue);
         }
         break;
@@ -611,7 +586,7 @@ static void input(struct vm *vm, struct dialog *g, unsigned held, int wheel)
     switch (g->kind) {
     case ARCADE_DIALOG_MESSAGE:
     case ARCADE_DIALOG_CONFIRM: {
-        int s = steps(g, wheel, CLICKS_ROW);
+        int s = wheel_rows(vm, g, wheel);
         if (scrolls) {
             g->top += s;
             if (g->top > g->lines - g->shown)
@@ -634,7 +609,7 @@ static void input(struct vm *vm, struct dialog *g, unsigned held, int wheel)
         break;
     }
     case ARCADE_DIALOG_CHOOSE:
-        g->at += steps(g, wheel, CLICKS_ROW);
+        g->at += wheel_rows(vm, g, wheel);
         if (pressed & ARCADE_PREV)
             g->at--;
         if (pressed & ARCADE_NEXT)
@@ -664,7 +639,7 @@ static void input(struct vm *vm, struct dialog *g, unsigned held, int wheel)
     }
     case ARCADE_DIALOG_TEXT:
         if (g->focus) {
-            g->at += steps(g, wheel, CLICKS_ROW);
+            g->at += wheel_rows(vm, g, wheel);
             if (pressed & ARCADE_PREV)
                 g->at = 0;
             if (pressed & ARCADE_NEXT)
@@ -692,7 +667,12 @@ static void input(struct vm *vm, struct dialog *g, unsigned held, int wheel)
             g->editing = 0;
         else if (right == 2)
             line_delete(g, g->caret);
+        /* as the player's own text entry: SELECT takes the line, PLAY
+         * goes down to OK and Cancel */
         if (pressed & ARCADE_SELECT) {
+            g->answer = 1;
+            g->done = 1;
+        } else if (pressed & ARCADE_PLAY) {
             g->editing = 0;
             g->focus = 1;
             g->at = 0;
@@ -735,6 +715,9 @@ static void quiet_begin(struct vm *vm, int rows, int world)
     saved = vm->d;
     vm->d.target = mk(T_INT, 0);
     vm->d.cam_x = vm->d.cam_y = 0;
+    vm->d.cam_turn = 0;
+    vm->d.cam_moved = 0;
+    vm->d.cam_zoom = 0x10000;
     clip(vm, 0, 0, SCREEN_W, SCREEN_H);
     vm->d.fill = 0;
     for (int i = 0; i < 256; i++)
@@ -821,6 +804,7 @@ static void run(struct vm *vm, struct dialog *g)
 static void dialog_open(struct dialog *g, int kind, const char *prompt)
 {
     memset(g, 0, offsetof(struct dialog, brk));
+    memset(&g->scroll, 0, sizeof(g->scroll));
     g->kind = kind;
     g->prompt = prompt;
 }
@@ -1012,7 +996,7 @@ void arcade_dialog_answer(struct vm *vm, const char *answer)
         g->len = 0;
         for (uint32_t i = 0; answer[i] && g->len < LINE_MAX;) {
             uint32_t cp = next_cp(answer, &i);
-            if (line_bytes(g) + cp_bytes(cp) > g->most)
+            if (line_bytes(g) + utf8_bytes(cp) > g->most)
                 break;
             g->line[g->len++] = cp;
         }
@@ -1021,13 +1005,14 @@ void arcade_dialog_answer(struct vm *vm, const char *answer)
 }
 
 int arcade_confirm(struct vm *vm, const char *prompt, const char *yes,
-                   const char *no)
+                   const char *no, int no_first)
 {
     static char text[TEXT_BYTES];
     prompt_of(text, sizeof(text), "", prompt);
     dialog_open(&dlg, ARCADE_DIALOG_CONFIRM, text);
     dlg.yes = yes;
     dlg.no = no;
+    dlg.at = no_first ? 1 : 0;
     run(vm, &dlg);
     return dlg.answer;
 }
