@@ -49,9 +49,14 @@ static int background_callback(int action,
     if (action == ACTION_ENTER_MENUITEM)
         was = global_settings.artist_bio_background;
     else if (action == ACTION_EXIT_MENUITEM
-             && global_settings.artist_bio_background == ARTIST_BIO_BG_CUSTOM
-             && was != ARTIST_BIO_BG_CUSTOM)
-        pick_custom_colour();
+             && global_settings.artist_bio_background != was)
+    {
+        /* the theme chose it, so a change is remembered for this theme */
+        settings_mark_user_tweak(
+            find_setting(&global_settings.artist_bio_background));
+        if (global_settings.artist_bio_background == ARTIST_BIO_BG_CUSTOM)
+            pick_custom_colour();
+    }
     return action;
 }
 

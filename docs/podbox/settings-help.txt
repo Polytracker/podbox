@@ -1282,6 +1282,8 @@ A font used only by the lyrics screen. Unset uses the interface font.
 What sits behind Artist Bio and Liner Notes: the theme's colour, a Custom one
 of your own, or Blurred Art, the banner photo or cover blurred behind white
 text. Blurred Art, Darker takes a light picture further down, for crisper text.
+The theme chooses the default, Blurred Art for Scrim; a change is kept for that
+theme.
 
 [artist bio banner]
 Shows the banner at the top of Artist Bio and Liner Notes -- the artist's photo,

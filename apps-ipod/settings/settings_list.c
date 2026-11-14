@@ -1901,7 +1901,9 @@ const struct settings_list settings[] = {
     OFFON_SETTING(0, lyric_backlight, LANG_LYRICS_BACKLIGHT, true,
                   "lyric backlight", NULL),
     /* Artist bio screen (apps-ipod/viewers/artist_bio) */
-    CHOICE_SETTING(0, artist_bio_background, LANG_CAROUSEL_BACKGROUND, 1,
+    /* a theme's to choose: Scrim's .cfg names Blurred Art */
+    CHOICE_SETTING(F_THEMESETTING|F_THEMERESET, artist_bio_background,
+                   LANG_CAROUSEL_BACKGROUND, 0,
                    "artist bio background",
                    "theme,custom,blurred,blurred dark", NULL, 4,
                    ID2P(LANG_TEXT_VIEWER_COLOUR_THEME),
