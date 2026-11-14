@@ -55,6 +55,12 @@ static int bg_tasks_count;
 static struct bg_task *bg_steps[BG_MAX_STEPS];
 static int bg_steps_count;
 
+/* Set by bg_task_halt(): no work starts, and a pass under way stops at its
+ * next check. bg_working is true while the thread is doing anything but
+ * waiting, so the halt can tell when the last file is closed. */
+static volatile bool bg_halted;
+static volatile bool bg_working;
+
 /* Sized for the deepest pass: the artwork cache's JPEG decoder and the album
  * index's builder each need DEFAULT_STACK_SIZE + 0x2000, and the file index's
  * recursive walk fits inside that. */
@@ -232,7 +238,7 @@ bool bg_task_should_stop(const struct bg_task *task)
         { SYS_REBOOT, SYS_REBOOT },
     };
 
-    if (bg_task_preempted(task))
+    if (bg_halted || bg_task_preempted(task))
         return true;
 
     /* Trap: the queue alone is too late for a host. Nothing arrives on it
@@ -478,23 +484,42 @@ static void bg_thread(void)
                 break;
 
             case SYS_TIMEOUT:
-                for (i = 0; i < bg_tasks_count; i++)
+                bg_working = true;
+                for (i = 0; i < bg_tasks_count && !bg_halted; i++)
                     bg_task_tick(bg_tasks[i]);
-                for (i = 0; i < bg_steps_count; i++)
+                for (i = 0; i < bg_steps_count && !bg_halted; i++)
                     bg_steps[i]->tick();
+                bg_working = false;
                 break;
 
             default:
                 /* bg_task_post() carries the task in the data word. A
                  * broadcast has SYS_EVENT set and is nobody's here. */
-                if (!(ev.id & SYS_EVENT))
+                bg_working = true;
+                if (!(ev.id & SYS_EVENT) && !bg_halted)
                 {
                     struct bg_task *task = (struct bg_task *)ev.data;
                     task->handle_event(&ev);
                 }
+                bg_working = false;
                 break;
         }
     }
+}
+
+bool bg_task_halt(long timeout)
+{
+    long end = current_tick + timeout;
+
+    bg_halted = true;
+    while (bg_working && TIME_BEFORE(current_tick, end))
+        sleep(HZ / 20);
+    return !bg_working;
+}
+
+void bg_task_resume(void)
+{
+    bg_halted = false;
 }
 
 void bg_task_start(void)

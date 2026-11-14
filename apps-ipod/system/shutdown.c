@@ -44,6 +44,7 @@
 #include "widgets/list.h"
 #include "playlist/playlist.h"
 #include "database/tagcache.h"
+#include "system/bg_task.h"    /* bg_task_halt */
 #include "screens/system/usb_screen.h"
 #include "games/arcade/shell.h"   /* shell_power_off */
 #include "metadata/book_resume.h"
@@ -55,6 +56,10 @@
 #include "app_util.h"
 #include "shutdown.h"
 #include "output_pause.h"
+
+/* Long enough for a background pass to finish the file it is writing: the
+ * slowest step between its checks is one cover decode. */
+#define BG_HALT_TIMEOUT (HZ * 10)
 
 #ifdef BOOTFILE
 /* True once this cable session's "before" BOOTFILE mtime has been recorded. */
@@ -126,6 +131,8 @@ static bool clean_shutdown(enum shutdown_type sd_type,
             splashf(0, "%s %s", str(LANG_WARNING_BATTERY_EMPTY),
                                 str(LANG_SHUTTINGDOWN));
         }
+
+        bg_task_halt(BG_HALT_TIMEOUT);
 
         /* A USB dock is told now, while the saves below give the USB
          * thread time to send it */
@@ -286,8 +293,10 @@ void car_adapter_mode_init(void)
 static void restart_firmware(void)
 {
     audio_hard_stop();
+    bg_task_halt(BG_HALT_TIMEOUT);
     usb_enable(false);
     rolo_load(BOOTDIR "/" BOOTFILE);
+    bg_task_resume();
     if (usb_inserted())
         usb_enable(true);
 }
