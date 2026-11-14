@@ -63,11 +63,11 @@
 #define AB_BANNER_MAX 240          /* tallest banner drawn, in pixels */
 #define AB_FADE       64           /* rows at the banner's foot that fade */
 #define AB_STEP       8            /* pixels per wheel click, at rest */
-#define AB_ACCEL_MAX  14           /* each adds half a step */
-/* The 6G's panel tears: each frame shows a seam as wide as that frame's
- * move, and nothing can be waited on to avoid it. Small moves at a high
- * frame rate keep the seam to a few pixels. */
-#define AB_GLIDE_MAX  1            /* most pixels the page moves a frame */
+#define AB_ACCEL_MAX  6            /* each adds half a step */
+#define AB_GLIDE_MAX  4            /* most pixels the page moves a frame */
+/* How far the target may run ahead of the page. The page stops within this
+ * many pixels of the wheel stopping, so it follows the finger. */
+#define AB_LEAD_MAX   32
 #define AB_BAR_W      3
 
 /* Blurred Art: Scrim's Now Playing backdrop. `scrim` brings the picture's
@@ -764,6 +764,7 @@ static void ab_scroll(int dir)
     last_dir = dir;
 
     ab.target += dir * (AB_STEP + accel * AB_STEP / 2);
+    ab.target = MAX(ab.pos - AB_LEAD_MAX, MIN(ab.target, ab.pos + AB_LEAD_MAX));
     ab.target = MAX(0, MIN(ab.target, ab_max_pos()));
 }
 
