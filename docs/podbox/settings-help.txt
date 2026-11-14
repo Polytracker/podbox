@@ -1044,6 +1044,10 @@ Recolours the interface from the artwork of whatever is playing. A skin not
 written for it will look wrong, since it cannot know what its colours will
 become.
 
+Now Playing Only keeps the album's colours to Now Playing, Album Covers and
+Lyrics; the menus keep the theme's. Scrim also leaves the blurred cover out of
+its menus.
+
 [dynamic colors background]
 Which of the album's two colours becomes the background. Auto takes the one
 the artwork has most of; Light and Dark always take the lighter or the darker.
