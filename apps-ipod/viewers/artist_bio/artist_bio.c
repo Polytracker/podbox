@@ -80,13 +80,14 @@ static bool ab_blurred(void)
         || global_settings.artist_bio_background == ARTIST_BIO_BG_BLURRED_DARK;
 }
 
-enum ab_font { AB_FONT_NAME, AB_FONT_SUB, AB_FONT_BODY, AB_FONTS };
+enum ab_font { AB_FONT_NAME, AB_FONT_SUB, AB_FONT_BODY, AB_FONT_HEAD, AB_FONTS };
 
 /* Scrim's fonts, by file; one that is not there is the UI font */
 static const char *const ab_font_files[AB_FONTS] = {
     FONT_DIR "/26-noto-sans-medium.fnt",
     FONT_DIR "/14-noto-sans.fnt",
     NULL,
+    FONT_DIR "/18-noto-sans-bold.fnt",
 };
 
 struct ab_line
@@ -359,6 +360,14 @@ static char *ab_line(char **p)
     return s;
 }
 
+/* Whether the next paragraph after p is ordinary text, not a "# " line */
+static bool ab_text_follows(const char *p)
+{
+    while (*p == '\n' || *p == '\r')
+        p++;
+    return *p && !(p[0] == '#' && p[1] == ' ');
+}
+
 /* Wraps `text` in `font` to `width` into the line table, from page position
  * y down. Returns the position below the last line. */
 static int ab_wrap(const char *text, enum ab_font font, int y, int width)
@@ -563,8 +572,11 @@ static bool ab_load_text(void)
     {
         if (!*para)
             continue;
-        /* "# " marks a quiet line: a heading, a source, the ratings */
-        if (para[0] == '#' && para[1] == ' ')
+        /* "# " marks a quiet line, a source or the ratings; one that
+         * ordinary text follows is that text's heading */
+        if (para[0] == '#' && para[1] == ' ' && ab_text_follows(p))
+            y = ab_wrap(para + 2, AB_FONT_HEAD, y, width) + body_h / 4;
+        else if (para[0] == '#' && para[1] == ' ')
             y = ab_wrap(para + 2, AB_FONT_SUB, y, width) + body_h / 2;
         else
             y = ab_wrap(para, AB_FONT_BODY, y, width) + body_h / 2;
@@ -802,7 +814,7 @@ static int ab_run(void)
 
     ab.text_handle = ab.banner_handle = ab.backdrop_handle = 0;
     ab.backdrop = NULL;
-    ab.loaded[0] = ab.loaded[1] = ab.loaded[2] = -1;
+    ab.loaded[0] = ab.loaded[1] = ab.loaded[2] = ab.loaded[3] = -1;
     ab.pos = ab.sub = ab.speed = 0;
 
     push_current_activity(ACTIVITY_ARTISTBIO);

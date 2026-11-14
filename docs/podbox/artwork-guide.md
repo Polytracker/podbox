@@ -125,5 +125,6 @@ Artwork
 ```
 
 The `.txt` is laid out as for a bio. A paragraph starting with `# ` is drawn small and grey,
-for a heading, the critics' scores or the source. Both pages share their settings, under
+for the critics' scores or the source; one followed by an ordinary paragraph is
+that paragraph's heading, drawn in bold. Both pages share their settings, under
 Settings > Appearance > Viewers > Artist Bio & Liner Notes.
