@@ -419,9 +419,22 @@ static void ab_make_backdrop(const struct bitmap *bm)
                       bm->width, bm->height, &f);
 }
 
-/* The banner beside the bio, decoded and its foot faded into the
- * background -- the backdrop's own pixels, with Blurred Art. Leaves
- * ab.banner.data NULL when there is none. */
+/* The first banner row of the fade at its foot */
+static int ab_fade_start(int height)
+{
+    return height > AB_FADE ? height - AB_FADE : 0;
+}
+
+/* How far banner row y has faded into what is behind it, 0 to 256 */
+static int ab_fade(int y, int height)
+{
+    int start = ab_fade_start(height);
+
+    return y < start ? 0 : (y - start + 1) * 256 / (height - start);
+}
+
+/* The banner above the bio, decoded and, on a solid background, its foot
+ * faded into it. Leaves ab.banner.data NULL when there is none. */
 static void ab_load_banner(void)
 {
     char path[MAX_PATH];
@@ -429,7 +442,7 @@ static void ab_load_banner(void)
     int format = FORMAT_NATIVE | FORMAT_RESIZE | FORMAT_KEEP_ASPECT
                  | FORMAT_DITHER;
     struct bitmap bm;
-    int need, used, x, y, start;
+    int need, used, x, y;
     fb_data *px;
 
     memset(&ab.banner, 0, sizeof ab.banner);
@@ -473,24 +486,22 @@ static void ab_load_banner(void)
         return;
     }
 
-    px = (fb_data *)bm.data;
-    start = bm.height > AB_FADE ? bm.height - AB_FADE : 0;
-    for (y = start; y < bm.height; y++)
+    /* over a backdrop the foot is faded as it is drawn, against the
+     * backdrop behind it at that scroll position */
+    if (!ab.backdrop)
     {
-        /* most of the way to a solid background, never quite: the photo
-         * still shows faintly under the name. All the way to a backdrop,
-         * which carries on below without a seam. */
-        int t = (y - start + 1) * (ab.backdrop ? 256 : 230)
-                / (bm.height - start);
-        fb_data *row = px + y * STRIDE(SCREEN_MAIN, bm.width, bm.height);
-        const fb_data *under = ab.backdrop ? ab.backdrop + y * ab.vp.width
-                               + (ab.vp.width - bm.width) / 2 : NULL;
+        px = (fb_data *)bm.data;
+        for (y = ab_fade_start(bm.height); y < bm.height; y++)
+        {
+            /* most of the way to the background, never quite: the photo
+             * still shows faintly under the name */
+            int t = ab_fade(y, bm.height) * 230 / 256;
+            fb_data *row = px + y * STRIDE(SCREEN_MAIN, bm.width, bm.height);
 
-        for (x = 0; x < bm.width; x++)
-            row[x] = FB_SCALARPACK_LCD(
-                color_blend(FB_UNPACK_SCALAR_LCD(row[x]),
-                            under ? FB_UNPACK_SCALAR_LCD(under[x]) : ab.bg,
-                            t));
+            for (x = 0; x < bm.width; x++)
+                row[x] = FB_SCALARPACK_LCD(
+                    color_blend(FB_UNPACK_SCALAR_LCD(row[x]), ab.bg, t));
+        }
     }
     ab.banner = bm;
 }
@@ -655,6 +666,37 @@ static void ab_draw_empty(struct screen *d)
     }
 }
 
+/* The banner, scrolled ab.pos up. Over a backdrop its foot fades into the
+ * backdrop rows now behind it, a row at a time, so the two meet without a
+ * seam wherever the page is. */
+static void ab_draw_banner(struct screen *d)
+{
+    static fb_data row[LCD_WIDTH];
+    const struct bitmap *bm = &ab.banner;
+    int stride = STRIDE(SCREEN_MAIN, bm->width, bm->height);
+    int x0 = (ab.vp.width - bm->width) / 2;
+    int start = ab.backdrop ? MAX(ab_fade_start(bm->height), ab.pos)
+                            : bm->height;
+    int y, x;
+
+    if (start > ab.pos)
+        d->bitmap_part(bm->data, 0, ab.pos, stride, x0, 0,
+                       bm->width, start - ab.pos);
+    for (y = start; y < bm->height && y - ab.pos < ab.vp.height; y++)
+    {
+        const fb_data *src = (const fb_data *)bm->data + y * stride;
+        const fb_data *under = ab.backdrop + (y - ab.pos) * ab.vp.width + x0;
+        int t = ab_fade(y, bm->height);
+
+        for (x = 0; x < bm->width; x++)
+            row[x] = FB_SCALARPACK_LCD(
+                color_blend(FB_UNPACK_SCALAR_LCD(src[x]),
+                            FB_UNPACK_SCALAR_LCD(under[x]), t));
+        d->bitmap_part(row, 0, 0, STRIDE(SCREEN_MAIN, bm->width, 1),
+                       x0, y - ab.pos, bm->width, 1);
+    }
+}
+
 static void ab_draw(void)
 {
     struct screen *d = &screens[SCREEN_MAIN];
@@ -677,10 +719,7 @@ static void ab_draw(void)
     }
 
     if (ab.banner.data && ab.pos < ab.banner.height)
-        d->bitmap_part(ab.banner.data, 0, ab.pos,
-                       STRIDE(SCREEN_MAIN, ab.banner.width, ab.banner.height),
-                       (ab.vp.width - ab.banner.width) / 2, 0,
-                       ab.banner.width, ab.banner.height - ab.pos);
+        ab_draw_banner(d);
 
     d->set_drawmode(DRMODE_FG);         /* the name lies over the photo */
     for (i = 0; i < ab.nlines; i++)
