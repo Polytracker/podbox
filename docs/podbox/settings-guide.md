@@ -443,9 +443,12 @@ Also reached as **Appearance** under `Settings > Playback > Now Playing Screen`.
 |---|---|---|---|
 | Show Album Title | Whether the album name is drawn over the covers, and where. | Show Album and Artist at the Bottom |  |
 | Show Year in Album Title | Shows the release year in the caption, before or after the album's name. | No |  |
-| Background | Which colour fills the screen behind the covers: one of the theme's, which follows Dynamic Colours, or Custom, a colour of your own that stays put. Choosing Custom opens a colour picker; Custom Colour below it changes the colour later. The captions turn black or white to read on it. | Background Colour |  |
+| Background | What fills the screen behind the covers: one of the theme's colours, which follow Dynamic Colours; Custom, a colour of your own that stays put; or Blurred Art, the playing album's cover blurred, as Scrim's menus show it. Choosing Custom opens a colour picker; Custom Colour below it changes the colour later. Blurred Art uses the last album played when nothing is playing, and the Background Colour while there is no cover to blur. | Background Colour |  |
 | Custom Colour | The colour behind the screen while Background is Custom. Dynamic Colours leave it alone, and the text over it turns black or white to read on it. | 000000 |  |
 | Status Bar | Draws the status bar over the carousel. Off gives the covers the whole screen. | No |  |
+| Floor Shadow | How dark the shadow on the ground below the covers is, darkest under the middle one. Off removes it. It cannot show on a black background. | 70% |  |
+| Shadow Distance | How far below the covers the floor shadow reaches. It fades out towards its lower edge. | 10 px | **Adv** |
+| Cover Shadow | How dark the shadow each cover casts on the covers behind it is. The middle cover's is the darker and wider; the side covers cast two-thirds as much. Off removes it, which also makes the carousel slightly quicker to draw. | 75% |  |
 | View Mode | 3D angles the covers away on both sides. Flat lays them face-on and the same size, in two piles either side of the current one. | 3D |  |
 | 3D Centre Margin | The gap between the front cover and its neighbours in the 3D view. | 0 | **Adv** |
 | 3D Slide Tuck | How far the side covers stack back behind the front one in the 3D view. | 32 | **Adv** |
@@ -456,6 +459,7 @@ Also reached as **Appearance** under `Settings > Playback > Now Playing Screen`.
 | Artwork Filter ▸ Filter 1 | First of three image adjustments applied to the covers in the carousel. Art rows in the browser are not affected. | Off | **Adv** |
 | Artwork Filter ▸ Filter 2 | Second image adjustment in the chain, applied after the first. | Off | **Adv** |
 | Artwork Filter ▸ Filter 3 | Third and last image adjustment in the chain. | Off | **Adv** |
+| Show Frame Rate | Shows frame timings in place of the caption: frames a second and the time each part of a frame takes. For checking how fast the carousel draws. | No | **Adv** |
 
 Also reached as **Appearance** under `Settings > Library > Carousel`.
 

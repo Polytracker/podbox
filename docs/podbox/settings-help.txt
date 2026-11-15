@@ -887,11 +887,13 @@ Whether the album name is drawn over the covers, and where.
 Shows the release year in the caption, before or after the album's name.
 
 [album covers background]
-Which colour fills the screen behind the covers: one of the theme's, which
-follows Dynamic Colours, or Custom, a colour of your own that stays put.
+What fills the screen behind the covers: one of the theme's colours, which
+follow Dynamic Colours; Custom, a colour of your own that stays put; or Blurred
+Art, the playing album's cover blurred, as Scrim's menus show it.
 
 Choosing Custom opens a colour picker; Custom Colour below it changes the colour
-later. The captions turn black or white to read on it.
+later. Blurred Art uses the last album played when nothing is playing, and the
+Background Colour while there is no cover to blur.
 
 [album covers statusbar]
 Draws the status bar over the carousel. Off gives the covers the whole screen.
@@ -944,6 +946,23 @@ the cover in the middle stands out. Zero leaves them solid.
 [album covers pile offset]
 How far below the middle cover the Flat view's piles sit. A cover eases down
 onto its pile as it leaves and back up as it arrives.
+
+[album covers floor shadow]
+How dark the shadow on the ground below the covers is, darkest under the
+middle one. Off removes it. It cannot show on a black background.
+
+[album covers shadow distance]
+How far below the covers the floor shadow reaches. It fades out towards its
+lower edge.
+
+[album covers cover shadow]
+How dark the shadow each cover casts on the covers behind it is. The middle
+cover's is the darker and wider; the side covers cast two-thirds as much. Off
+removes it, which also makes the carousel slightly quicker to draw.
+
+[album covers show stats]
+Shows frame timings in place of the caption: frames a second and the time each
+part of a frame takes. For checking how fast the carousel draws.
 
 [wps]
 The skin drawn while music is playing. Part of a theme; loading a theme sets

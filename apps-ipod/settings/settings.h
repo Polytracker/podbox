@@ -771,6 +771,13 @@ struct user_settings
     /* Flat view only: how far below the middle cover the piles sit, in pixels.
      * A cover eases down to it on its way out and back up on its way in. */
     int  album_covers_pile_offset;
+    /* Percent, 0 off: the shadow on the ground below the covers, how far
+     * below them it reaches, and the shadow a 3D cover casts on those
+     * behind it. */
+    int  album_covers_floor_shadow;
+    int  album_covers_shadow_distance;
+    int  album_covers_cover_shadow;
+    bool album_covers_show_stats;   /* frame timings in the caption's place */
     /* The three below shape the tilted view only; flat mode ignores them and
      * the menu hides them. */
     int  album_covers_center_margin;
