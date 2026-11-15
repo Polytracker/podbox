@@ -245,7 +245,7 @@ bool bg_task_should_stop(const struct bg_task *task)
      * until SET_CONFIGURATION, by which point a pass holding the CPU has
      * already cost the host SET_ADDRESS. usb_host_wants_storage() is true from
      * the moment the cable goes in. */
-    if (usb_host_wants_storage())
+    if (usb_host_wants_storage() || usb_storage_is_ejected())
         return true;
 
     /* Count field is filters minus one. */
@@ -484,6 +484,12 @@ static void bg_thread(void)
                 break;
 
             case SYS_TIMEOUT:
+                /* Trap: a host that has ejected the disk can still unplug
+                 * into a firmware reload (Boot changed, or a database it
+                 * replaced), which halts whatever is running. So no work
+                 * starts between the eject and the cable coming out. */
+                if (usb_storage_is_ejected())
+                    break;
                 bg_working = true;
                 for (i = 0; i < bg_tasks_count && !bg_halted; i++)
                     bg_task_tick(bg_tasks[i]);
