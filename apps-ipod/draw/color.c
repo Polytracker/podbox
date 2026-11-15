@@ -480,8 +480,8 @@ static bool parse_amount(const char **p, int max, int *out)
 }
 
 /* `accent`, `dominant` or `vivid`, then optionally `>NN` or `<NN`, `.NN`
- * and `:rrggbb`, `:fg`, `:fg.NN` or `:bg`, in that order; or `rrggbb` with one of
- * those last three. Identical words share one table entry, so a skin pays for
+ * and `:rrggbb`, `:fg`, `:fg.NN` or `:bg`, in that order; or `rrggbb` or
+ * `!rrggbb` with one of those last four. Identical words share one table entry, so a skin pays for
  * the distinct colours it names, not for each use. */
 static bool parse_word(const char *text, int *value)
 {
@@ -506,13 +506,15 @@ static bool parse_word(const char *text, int *value)
     if (!p)
     {
         int plain;
+        const char *hex = text + (*text == '!');
 
         /* A plain colour only with a fallback: without one it is a literal */
-        if (strlen(text) < 7 || text[6] != ':' || hex_to_rgb(text, &plain) < 0)
+        if (strlen(hex) < 7 || hex[6] != ':' || hex_to_rgb(hex, &plain) < 0)
             return false;
         w.kind = COLOR_WORD_PLAIN;
         w.plain = plain;
-        p = text + 6;
+        w.plain_fixed = hex != text;
+        p = hex + 6;
     }
 
     if (w.kind != COLOR_WORD_PLAIN && (*p == '>' || *p == '<'))

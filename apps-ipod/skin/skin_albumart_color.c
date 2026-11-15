@@ -1930,6 +1930,10 @@ static unsigned int resolve_word(unsigned int original, bool palette)
             return global_settings.bg_color;
         return w->fallback;
     }
+    if (w->kind == COLOR_WORD_PLAIN)
+        return w->plain_fixed ? w->plain
+                              : resolve_mapped(w->plain, cache.accent,
+                                               cache.dominant);
     if (word_from[i] == from)
         return word_out[i];
 
