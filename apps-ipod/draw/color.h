@@ -43,7 +43,7 @@ enum color_word_kind
     COLOR_WORD_ACCENT,          /* the album's text colour */
     COLOR_WORD_DOMINANT,        /* the album's background colour */
     COLOR_WORD_VIVID,           /* the album's most colourful colour */
-    COLOR_WORD_PLAIN,           /* `rrggbb:fg`: that colour, as `!rrggbb` */
+    COLOR_WORD_PLAIN,           /* `rrggbb:fg`: that colour, as if written bare */
 };
 
 /* Where a word's colour comes from when the album's colours are not in use */
@@ -68,6 +68,7 @@ struct color_word
                                  * Background Colour; 0 is none */
     unsigned fallback;          /* the `:rrggbb` colour, native */
     unsigned plain;             /* COLOR_WORD_PLAIN's colour, native */
+    bool plain_fixed;           /* written `!rrggbb`: the palette leaves it */
 };
 
 /* The word a parsed colour stands for, or NULL if it is a plain colour. */

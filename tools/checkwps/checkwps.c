@@ -630,7 +630,8 @@ static const char *colour_text(unsigned int c, char *buf, int len)
     if (w)
     {
         int n = w->kind == COLOR_WORD_PLAIN
-                ? snprintf(buf, len, "%02x%02x%02x", RGB_UNPACK_RED(w->plain),
+                ? snprintf(buf, len, "%s%02x%02x%02x", w->plain_fixed ? "!" : "",
+                           RGB_UNPACK_RED(w->plain),
                            RGB_UNPACK_GREEN(w->plain),
                            RGB_UNPACK_BLUE(w->plain))
                 : snprintf(buf, len, "%s", names[w->kind]);

@@ -1211,12 +1211,15 @@ Background Colour setting, unbounded, so the screen follows those settings
 whenever the album's colours are not in use. `:fg.NN` is the Foreground
 Colour taken `NN` percent of the way from the Background Colour, for a
 dimmer second tone: `:fg.74` of white on black is `bdbdbd`. A plain colour takes one too:
-`ffffff:fg` is white like `!ffffff` with the album's colours, and the
-Foreground Colour without them.
+`ffffff:fg` is white with the album's colours, carried over by the palette
+like any other, and the Foreground Colour without them; `!ffffff:fg` stays
+white with the album's colours.
 
 ```
-%Vb(dominant<15:bg)                     # background
-%?Lc<%Vf(ffffff:fg)|%Vf(vivid>85:fg.74)>   # selected row, other rows
+%Vb(dominant<15:bg)                         # background
+%?Lc<%Vf(!ffffff:fg)|%Vf(vivid>85:fg.74)>   # selected row, other rows
+%dr(0,0,320,35,ffffff:fg,-,12)              # a bar in the text colour
+%Vf(000000:bg)                              # and text on it
 ```
 
 The parts go in that order: word, bound, shade, fallback. Like `!`, the words
