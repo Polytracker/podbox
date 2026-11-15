@@ -1694,6 +1694,90 @@ static const struct img_filter *carousel_filter(void)
 #define PF_READ_SLACK 0
 #endif
 
+/* --- Side Blur ------------------------------------------------------------
+ * A slide loaded while Side Blur is on carries a blurred copy at half size
+ * after its pixels, column-major like them, and get_slide()'s offset word has
+ * PF_SLIDE_BLURRED set. Half size is a blur in itself, costs a quarter more
+ * memory rather than double, and is read by halving the render's source row,
+ * so a wholly blurred column draws as fast as a sharp one. */
+#define PF_SLIDE_BLURRED 0x10000
+#define PF_SLIDE_OFFSET  0xffff
+
+/* The blurred copy's size for a slide `w` by `h`. */
+#define PF_BLUR_W(w) (((w) + 1) / 2)
+#define PF_BLUR_H(h) (((h) + 1) / 2)
+
+/* One box-blur pass of radius `r` along `len` pixels `stride` apart. */
+static void pf_blur_line(pix_t *px, int len, int stride, int r)
+{
+    static unsigned char cr[DISPLAY_WIDTH], cg[DISPLAY_WIDTH],
+                         cb[DISPLAY_WIDTH];
+    /* Rounded up, and each average rounded to nearest: rounding down at
+     * every pass of the six visibly darkens the copy. */
+    const int inv = (65536 + 2 * r) / (2 * r + 1);
+    int i, sr = 0, sg = 0, sb = 0;
+
+    for (i = 0; i < len; i++)
+    {
+        pix_t c = px[i * stride];
+
+        cr[i] = c >> 11;
+        cg[i] = (c >> 5) & 0x3f;
+        cb[i] = c & 0x1f;
+    }
+    for (i = -r; i <= r; i++)
+    {
+        int j = MIN(MAX(i, 0), len - 1);
+
+        sr += cr[j]; sg += cg[j]; sb += cb[j];
+    }
+    for (i = 0; i < len; i++)
+    {
+        int in = MIN(i + r + 1, len - 1), out = MAX(i - r, 0);
+
+        px[i * stride] = (MIN((sr * inv + 32768) >> 16, 31) << 11)
+                       | (MIN((sg * inv + 32768) >> 16, 63) << 5)
+                       | MIN((sb * inv + 32768) >> 16, 31);
+        sr += cr[in] - cr[out];
+        sg += cg[in] - cg[out];
+        sb += cb[in] - cb[out];
+    }
+}
+
+/* Writes the half-size blurred copy of the column-major `src`, `w` columns of
+ * `h`, to `dst`: a 2x2 average, then two box passes each way of `r`. */
+static void pf_make_blur(const pix_t *src, int w, int h, pix_t *dst, int r)
+{
+    const int bw = PF_BLUR_W(w), bh = PF_BLUR_H(h);
+    int c, y, pass;
+
+    for (c = 0; c < bw; c++)
+    {
+        const pix_t *c0 = src + 2 * c * h;
+        const pix_t *c1 = (2 * c + 1 < w) ? c0 + h : c0;
+
+        for (y = 0; y < bh; y++)
+        {
+            int y1 = (2 * y + 1 < h) ? 2 * y + 1 : 2 * y;
+            pix_t a = c0[2 * y], b = c0[y1], d = c1[2 * y], e = c1[y1];
+
+            dst[c * bh + y] =
+                ((((a >> 11) + (b >> 11) + (d >> 11) + (e >> 11) + 2) >> 2)
+                 << 11)
+              | (((((a >> 5) & 0x3f) + ((b >> 5) & 0x3f) + ((d >> 5) & 0x3f)
+                   + ((e >> 5) & 0x3f) + 2) >> 2) << 5)
+              | (((a & 0x1f) + (b & 0x1f) + (d & 0x1f) + (e & 0x1f) + 2) >> 2);
+        }
+    }
+    for (pass = 0; pass < 2; pass++)
+    {
+        for (c = 0; c < bw; c++)
+            pf_blur_line(dst + c * bh, bh, 1, r);
+        for (y = 0; y < bh; y++)
+            pf_blur_line(dst + y, bw, bh, r);
+    }
+}
+
 /* Read a shared-cache thumbnail from an open fd (.aat: struct art_cache_header
  * followed by native pixels) into a buflib surface in the column-major layout
  * render_slide() expects. The fd stays the caller's to close.
@@ -1715,15 +1799,21 @@ static int read_aat(int fh, int prio)
     const ssize_t most = sizeof(hdr)
                        + sizeof(pix_t) * DISPLAY_WIDTH * DISPLAY_HEIGHT;
     ssize_t len = ffilesize(fh);
+    const int blur = global_settings.album_covers_side_blur;
+    size_t extra;
     int row, col, w, h, hid;
 
     if (len <= (ssize_t)sizeof(hdr))
         return empty_slide_hid;
     if (len > most)
         len = most;
+    /* Room for the blurred copy, bounded from the pixels the file can hold:
+     * a quarter of them, plus a row and a column for odd sizes. */
+    extra = blur ? len / 4 + sizeof(pix_t) * (DISPLAY_WIDTH + DISPLAY_HEIGHT)
+                 : 0;
 
     do {
-        hid = buflib_alloc(&buf_ctx, sizeof(int) + PF_READ_SLACK + len);
+        hid = buflib_alloc(&buf_ctx, sizeof(int) + PF_READ_SLACK + len + extra);
     } while (hid < 0 && free_slide_prio(prio));
 
     if (hid < 0)
@@ -1786,6 +1876,11 @@ static int read_aat(int fh, int prio)
      * grid turned on its side is still a Bayer grid. */
     img_filter_apply_banded(dst, h, w, carousel_filter());
 
+    if (blur)
+    {
+        pf_make_blur(dst, w, h, dst + w * h, blur);
+        *(int *)block |= PF_SLIDE_BLURRED;
+    }
     return hid;
 }
 
@@ -2017,7 +2112,27 @@ static inline struct dim *get_slide(const int hid)
      * than a pointer: buflib may move the block. */
     char *block = buflib_get_data(&buf_ctx, hid);
 
-    return (struct dim *)(block + *(int *)block);
+    return (struct dim *)(block + (*(int *)block & PF_SLIDE_OFFSET));
+}
+
+/* The blurred copy of `slide`, whose surface() is `bmp`, or NULL if it was
+ * loaded without one. surface() has just left cached_slot pointing at it. */
+static const pix_t *surface_blur(struct slide_data *slide, struct dim *bmp)
+{
+    int slot = slide->cached_slot;
+    int hid;
+    char *block;
+
+    if ((unsigned)slot >= SLIDE_CACHE_SIZE ||
+        pf_sldcache.cache[slot].index != slide->slide_index)
+        return NULL;
+    hid = pf_sldcache.cache[slot].hid;
+    if (hid <= 0 || get_slide(hid) != bmp)
+        return NULL;
+    block = buflib_get_data(&buf_ctx, hid);
+    if (!(*(int *)block & PF_SLIDE_BLURRED))
+        return NULL;
+    return (const pix_t *)(bmp + 1) + bmp->width * bmp->height;
 }
 
 
@@ -2731,6 +2846,9 @@ struct pf_col
     int n;              /* rows left to write */
     const struct pf_fade *f;    /* NULL for opaque */
     struct pf_fade shade;       /* this column's own, under a cast shadow */
+    const pix_t *blur;  /* the blurred copy's column, read at p >> 11 */
+    int mix;            /* how much of it, out of 256; 0 for none */
+    int edge;           /* the last row's coverage, out of 256; 0 for full */
 };
 
 /* --- Shadows ---------------------------------------------------------------
@@ -2764,6 +2882,21 @@ static struct
 static short pf_col_bottom[LCD_WIDTH];
 static short pf_col_weight[LCD_WIDTH];
 static int pf_slide_weight;     /* the slide being rendered's, out of 256 */
+
+/* Side Blur starts this far either side of the screen's middle, half the
+ * middle cover's width at rest, and is whole PF_BLUR_RAMP columns further
+ * out. */
+#define PF_BLUR_RAMP 32
+static int pf_blur_inner = 64;
+
+/* How much of the blurred copy column `x` draws, out of 256. */
+static inline int pf_blur_weight(int x)
+{
+    int d = (x >= LCD_WIDTH / 2 ? x - LCD_WIDTH / 2 : LCD_WIDTH / 2 - 1 - x)
+            - pf_blur_inner;
+
+    return (d <= 0) ? 0 : (d >= PF_BLUR_RAMP) ? 256 : d * 256 / PF_BLUR_RAMP;
+}
 static bool pf_floor_on;        /* this frame records bottoms */
 
 /* The rows below a cover the floor shadow reaches, 0 if it is off. */
@@ -2827,6 +2960,49 @@ static void NO_INLINE draw_run_faded(struct pf_col *k, int n, int step,
     k->px = pixel;
 }
 
+/* `a` and `b` mixed, `wb` of `b` out of 256, a multiple of four for the
+ * reason fade_color() gives. */
+static inline pix_t mix_color(pix_t a, pix_t b, unsigned int wb)
+{
+    unsigned int wa = 256 - wb, result;
+
+    result  = ((a & 0xf81f) * wa + (b & 0xf81f) * wb) & 0xf81f00;
+    result |= ((a & 0x7e0)  * wa + (b & 0x7e0)  * wb) & 0x7e000;
+    return result >> 8;
+}
+
+/* A column part way into the Side Blur: the sharp source and the half-size
+ * blurred one, mixed. */
+static void NO_INLINE draw_run_mix(struct pf_col *k, int n, int step)
+{
+    const pix_t *src = k->src, *blur = k->blur;
+    pix_t *pixel = k->px;
+    unsigned int p = k->p;
+    const int dp = k->dp;
+    const unsigned int wb = k->mix;
+
+    for (; n > 0; n--)
+    {
+        *pixel = mix_color(src[p >> PFREAL_SHIFT],
+                           blur[p >> (PFREAL_SHIFT + 1)], wb);
+        p += dp; pixel += step;
+    }
+    k->p = p;
+    k->px = pixel;
+}
+
+/* A column's last row where it only partly covers it: the cover's pixel over
+ * whatever is already there, by its coverage. This is what smooths the steps
+ * along the top and bottom of an angled cover. */
+static void draw_edge(struct pf_col *k)
+{
+    pix_t c = k->src[MAX(k->p, 0) >> PFREAL_SHIFT];
+
+    if (k->f)
+        c = fade_color(c, k->f->a, k->f->rb, k->f->g);
+    *k->px = mix_color(*k->px, c, k->edge);
+}
+
 /* Draw one half, upper or lower, of a tile's columns a band at a time. `step`
  * is the framebuffer stride in the half's direction. Returns the pixels
  * written. */
@@ -2844,14 +3020,28 @@ static int draw_tile_half(struct pf_col *cols, int ncols, int step)
             int n = MIN(k->n, PF_TILE_ROWS);
 
             if (n <= 0)
+            {
+                if (k->edge)
+                {
+                    draw_edge(k);
+                    k->edge = 0;
+                }
                 continue;
+            }
             k->n -= n;
             more |= (k->n > 0);
             total += n;
             if (k->f)
                 draw_run_faded(k, n, step, k->f);
+            else if (k->mix)
+                draw_run_mix(k, n, step);
             else
                 draw_run(k, n, step);
+            if (k->n == 0 && k->edge)
+            {
+                draw_edge(k);
+                k->edge = 0;
+            }
         }
     }
     return total;
@@ -2881,6 +3071,8 @@ static void render_slide_clipped(struct slide_data *slide, const int alpha,
     if (x_from >= x_to)
         return;
     pix_t *src = (pix_t*)(sizeof(struct dim) + (char *)bmp);
+    const pix_t *blur = surface_blur(slide, bmp);
+    const bool smooth = global_settings.album_covers_smooth_edges;
 
     const int sw = bmp->width;
     const int sh = bmp->height;
@@ -3033,6 +3225,52 @@ static void render_slide_clipped(struct slide_data *slide, const int alpha,
         {
             pf_col_bottom[x] = half_height + l->n;
             pf_col_weight[x] = pf_slide_weight * alpha >> 8;
+        }
+
+        /* Smooth Edges: past the top row, the row above by how much of it
+         * the cover reaches into; the bottom row by how much of it the cover
+         * covers. Only where the cover ends, not the screen. */
+        u->edge = l->edge = 0;
+        if (smooth && perspective)
+        {
+            if (u->n > 0 && plim == 0 && u->n < half_height)
+                u->edge = div_by_recip(
+                    (p_start_upper - (u->n - 1) * dy) << 8, dy, recip) & ~3;
+            if (l->n > 0 && plo == sh * PFREAL_ONE)
+            {
+                int cov = div_by_recip(
+                    (plo - p_start_lower - (l->n - 1) * dy) << 8, dy, recip);
+
+                if (cov < 252)
+                {
+                    l->n--;
+                    l->edge = cov & ~3;
+                }
+            }
+        }
+
+        /* Side Blur: wholly blurred columns read the half-size copy with the
+         * row halved, at no cost over a sharp one; the ramp between mixes the
+         * two. A faded column takes whichever is nearer. */
+        u->mix = l->mix = 0;
+        if (blur)
+        {
+            int t = pf_blur_weight(x);
+            const pix_t *bcol = &blur[(column >> 1) * PF_BLUR_H(sh)];
+
+            if (t >= 252 || (t >= 128 && u->f))
+            {
+                u->src = l->src = bcol;
+                u->p >>= 1;
+                l->p >>= 1;
+                u->dp = -(dy >> 1);
+                l->dp = dy >> 1;
+            }
+            else if (t >= 4 && !u->f)
+            {
+                u->blur = l->blur = bcol;
+                u->mix = l->mix = t & ~3;
+            }
         }
 
         /* A tile ends where a cache line does, not after PF_TILE_W columns
@@ -3335,23 +3573,45 @@ static void show_random_slide(void)
  * which of the two is above the other, and that is the handover. */
 /* Piles taken all the way to the background have nothing left to draw, and
  * drawing them anyway would paint background over what is behind them. */
+/* How near the centre a cover is, out of 256: all of it at the centre, none
+ * from the first side position out. The shadows a cover throws grow with it,
+ * so one sliding into the centre darkens by degrees rather than at once. */
+static int pf_centreness(const struct slide_data *slide)
+{
+    PFreal span = flat_view() ? PF_PILE_CX : offsetX;
+    PFreal d = (slide->cx >= 0) ? slide->cx : -slide->cx;
+
+    if (span <= 0)
+        return slide == &center_slide ? 256 : 0;
+    if (d >= span)
+        return 0;
+    return 256 - (int)((d << 8) / span);
+}
+
+/* A slide's floor-shadow weight, from a side cover's up to the centre's. */
+static int pf_weight_of(const struct slide_data *slide)
+{
+    return PF_SIDE_WEIGHT
+           + ((256 - PF_SIDE_WEIGHT) * pf_centreness(slide) >> 8);
+}
+
 /* Puts the slide about to be drawn under the shadow of `front`, the cover
  * drawn over it: its edge on the side facing the slide, `left` for a slide
  * left of it. None if Cover Shadow is off or `front` is not drawn. */
-static void pf_cast_from(struct slide_data *front, int front_alpha,
-                         bool centre, bool left)
+static void pf_cast_from(struct slide_data *front, int front_alpha, bool left)
 {
     int x0, x1, s = global_settings.album_covers_cover_shadow;
+    int c = pf_centreness(front);
 
     pf_cast.s = 0;
     if (s <= 0 || front_alpha <= 0 || !slide_x_range(front, &x0, &x1))
         return;
-    s = s * 256 / 100;
-    if (!centre)
-        s = s * 2 / 3;
+    /* Two thirds at the side, all of it at the centre. */
+    s = (s * 256 / 100) * (512 + c) / 768;
     pf_cast.s = MIN(s * MIN(front_alpha, 256) >> 8, 252);
     pf_cast.edge = left ? x0 : x1;
-    pf_cast.w = centre ? PF_CAST_W_CENTRE : PF_CAST_W_SIDE;
+    pf_cast.w = PF_CAST_W_SIDE
+              + ((PF_CAST_W_CENTRE - PF_CAST_W_SIDE) * c >> 8);
     pf_cast.left = left;
 }
 
@@ -3362,16 +3622,11 @@ static void flat_draw(struct slide_data *slide)
     if (slide->alpha <= 0)
         return;
     if (slide == &center_slide)
-    {
         pf_cast.s = 0;
-        pf_slide_weight = 256;
-    }
     else
-    {
-        pf_cast_from(&center_slide, center_slide.alpha, true,
+        pf_cast_from(&center_slide, center_slide.alpha,
                      slide->cx < center_slide.cx);
-        pf_slide_weight = PF_SIDE_WEIGHT;
-    }
+    pf_slide_weight = pf_weight_of(slide);
     render_slide(slide, slide->alpha);
     pf_cast.s = 0;
 }
@@ -3396,7 +3651,7 @@ static void flat_render(void)
     if (pf_flat_handover) {
         /* the arriving card is on top: nothing shades it */
         flat_draw(&center_slide);
-        pf_slide_weight = 256;
+        pf_slide_weight = pf_weight_of(arriving);
         if (arriving->alpha > 0)
             render_slide(arriving, arriving->alpha);
     } else {
@@ -3596,13 +3851,12 @@ static void coverflow_render(void)
     cull_side(left_slides, left_alpha, center_alpha, left_to, false);
     cull_side(right_slides, right_alpha, center_alpha, right_from, true);
 
-    pf_slide_weight = PF_SIDE_WEIGHT;
     for (index = nleft - 1; index >= 0; index--)
         if (left_alpha[index] > 0)
         {
             pf_cast_from(index ? &left_slides[index - 1] : &center_slide,
-                         index ? left_alpha[index - 1] : center_alpha,
-                         index == 0, true);
+                         index ? left_alpha[index - 1] : center_alpha, true);
+            pf_slide_weight = pf_weight_of(&left_slides[index]);
             render_slide_clipped(&left_slides[index], left_alpha[index],
                                  0, left_to[index]);
         }
@@ -3610,20 +3864,33 @@ static void coverflow_render(void)
         if (right_alpha[index] > 0)
         {
             pf_cast_from(index ? &right_slides[index - 1] : &center_slide,
-                         index ? right_alpha[index - 1] : center_alpha,
-                         index == 0, false);
+                         index ? right_alpha[index - 1] : center_alpha, false);
+            pf_slide_weight = pf_weight_of(&right_slides[index]);
             render_slide_clipped(&right_slides[index], right_alpha[index],
                                  right_from[index], LCD_WIDTH);
         }
+    /* Once the arriving cover is drawn over the centre one, it is the one
+     * casting the shadow. */
+    if (redraw_right_0)
+        pf_cast_from(&right_slides[0], 256, true);
+    else if (redraw_left_0)
+        pf_cast_from(&left_slides[0], 256, false);
+    else
+        pf_cast.s = 0;
+    pf_slide_weight = pf_weight_of(&center_slide);
+    render_slide(&center_slide, center_alpha);
     pf_cast.s = 0;
 
-    pf_slide_weight = 256;
-    render_slide(&center_slide, center_alpha);
-
     if (redraw_right_0)
+    {
+        pf_slide_weight = pf_weight_of(&right_slides[0]);
         render_slide(&right_slides[0], 256);
+    }
     else if (redraw_left_0)
+    {
+        pf_slide_weight = pf_weight_of(&left_slides[0]);
         render_slide(&left_slides[0], 256);
+    }
 }
 
 /* The rows the covers will disturb this frame: the ones they can reach now,
@@ -3663,7 +3930,9 @@ static void cover_rows(int *y0, int *y1)
 
 /* Darkens the ground under the covers, within the band [y, y + h) of the
  * viewport the frame cleared: below each column's lowest cover row, fading
- * out with depth and softened sideways across the edges of the covers. */
+ * out with depth and softened sideways across the edges of the covers. Where
+ * the covers' area ends before the shadow would, the fade is squeezed into
+ * the rows there are, so it always reaches nothing rather than stopping. */
 static void pf_floor_shadow(int y, int h)
 {
     static short bottom[LCD_WIDTH];
@@ -3673,17 +3942,20 @@ static void pf_floor_shadow(int y, int h)
     const int len = dist + soft;
     const int s = global_settings.album_covers_floor_shadow * 256 / 100;
     /* Clipped to the band, and to the covers' own area, in buffer rows */
+    const int floor_y = pf_half_height + pf_lower_half;
     const int lo = MAX(0, y - pf_draw_y_shift);
-    const int hi = MIN(pf_half_height + pf_lower_half,
-                       y + h - pf_draw_y_shift);
+    const int hi = MIN(floor_y, y + h - pf_draw_y_shift);
     int profile[20 + PF_SHADOW_SOFT];
     int x, k, last, lastx, sum;
 
-    /* Full strength down to dist - soft, then fading to nothing at
-     * dist + soft. */
+    /* Full strength down to dist - soft, then easing out to nothing at
+     * dist + soft, squared so the tail has no visible end. */
     for (k = 0; k < len; k++)
-        profile[k] = (k < dist - soft) ? 256
-                   : MIN(256, (len - k) * 256 / (2 * soft));
+    {
+        int u = MIN(256, (len - k) * 256 / (2 * soft));
+
+        profile[k] = (k < dist - soft) ? 256 : u * u >> 8;
+    }
 
     /* Columns beside a cover take its bottom row, so the softened edge has
      * somewhere to go: nearest to the left first, then to the right. */
@@ -3718,13 +3990,19 @@ static void pf_floor_shadow(int y, int h)
     {
         int d0 = s * strength[x] >> 8;
         int r0 = bottom[x];
+        int rows, step;
 
         if (d0 <= 0 || r0 < 0)
             continue;
-        for (k = MAX(0, lo - r0); k < len && r0 + k < hi; k++)
+        rows = MIN(len, floor_y - r0);
+        if (rows <= 0)
+            continue;
+        step = (len << 8) / rows;   /* profile rows per row, 8 bits */
+        for (k = MAX(0, lo - r0); k < rows && r0 + k < hi; k++)
         {
             pix_t *px = &buffer[(r0 + k) * BUFFER_WIDTH + x];
-            unsigned int fa = (256 - (d0 * profile[k] >> 8)) & 0x1fc;
+            unsigned int fa = (256 - (d0 * profile[k * step >> 8] >> 8))
+                              & 0x1fc;
 
             *px = fade_color(*px, fa, 0, 0);
         }
@@ -3749,6 +4027,13 @@ static void render_all_slides(int y, int h)
      * and a turn handed to the codec mid-frame shows them late by however long
      * it took, which differs from frame to frame and reads as judder. The
      * frame's one yield comes after its flush. */
+    if (step == 0)
+    {
+        int x0, x1;
+
+        if (slide_x_range(&center_slide, &x0, &x1))
+            pf_blur_inner = (x1 - x0) / 2;
+    }
     pf_floor_on = pf_floor_len() > 0;
     if (pf_floor_on)
     {
