@@ -2534,6 +2534,21 @@ static inline pix_t fade_color(pix_t c, unsigned int fa, unsigned int frb,
     return result >> 8;
 }
 
+/* fade_color() towards black with a 4x4 ordered dither at (x, y): each
+ * channel's rounding is pushed up by a different amount at each pixel, so a
+ * gentle darkening shows as a smooth gradient rather than as the bands that
+ * five bits of red and blue make of it. Red has six bits of fraction to
+ * spare below it, blue and green eight. */
+static inline pix_t fade_dither(pix_t c, unsigned int fa, int x, int y)
+{
+    static const unsigned char bayer[4][4] = {
+        {  8, 136,  40, 168 }, { 200,  72, 232, 104 },
+        { 56, 184,  24, 152 }, { 248, 120, 216,  88 } };
+    const unsigned int d = bayer[y & 3][x & 3];
+
+    return fade_color(c, fa, (d >> 2) << 13 | d, d << 5);
+}
+
 /**
  * Render a single slide
  * Where xc is the slide's horizontal offset from center, xs is the horizontal
@@ -3663,24 +3678,36 @@ static bool pf_shadow_fading(void)
            && pf_centre_ramp() < 256;
 }
 
+/* How near the middle a cover is, out of 256: all of it there, none from the
+ * first side position out. */
+static int pf_centre_pos(const struct slide_data *slide)
+{
+    PFreal span = flat_view() ? PF_PILE_CX : offsetX;
+    PFreal d = (slide->cx >= 0) ? slide->cx : -slide->cx;
+
+    if (span <= 0)
+        return slide == &center_slide ? 256 : 0;
+    if (d >= span)
+        return 0;
+    return 256 - (int)((d << 8) / span);
+}
+
 /* How much of the middle cover's shadows a cover throws, out of 256: the
  * middle cover's, faded in by pf_centre_ramp(), and falling away as it moves
  * off towards the first side position; none for any other cover. */
 static int pf_centreness(const struct slide_data *slide)
 {
-    PFreal span = flat_view() ? PF_PILE_CX : offsetX;
-    PFreal d = (slide->cx >= 0) ? slide->cx : -slide->cx;
-
-    if (slide != &center_slide || span <= 0 || d >= span)
+    if (slide != &center_slide)
         return 0;
-    return (256 - (int)((d << 8) / span)) * pf_centre_ramp() >> 8;
+    return pf_centre_pos(slide) * pf_centre_ramp() >> 8;
 }
 
-/* A slide's floor-shadow weight, from a side cover's up to the centre's. */
+/* A slide's floor-shadow weight: a side cover's, giving way to nothing as it
+ * nears the middle, plus the middle cover's own as it fades in. */
 static int pf_weight_of(const struct slide_data *slide)
 {
-    return PF_SIDE_WEIGHT
-           + ((256 - PF_SIDE_WEIGHT) * pf_centreness(slide) >> 8);
+    return (PF_SIDE_WEIGHT * (256 - pf_centre_pos(slide))
+            + 256 * pf_centreness(slide)) >> 8;
 }
 
 /* Puts the slide about to be drawn under the shadow of `front`, the cover
@@ -3694,8 +3721,11 @@ static void pf_cast_from(struct slide_data *front, int front_alpha, bool left)
     pf_cast.s = 0;
     if (s <= 0 || front_alpha <= 0 || !slide_x_range(front, &x0, &x1))
         return;
-    /* Two thirds at the side, all of it at the centre. */
-    s = (s * 256 / 100) * (512 + c) / 768;
+    /* Two thirds at a side position, giving way to nothing as a cover nears
+     * the middle, where the middle cover's own fades in from nothing: so a
+     * cover arriving drops its side shadow and only then grows the middle
+     * one. */
+    s = (s * 256 / 100) * ((256 - pf_centre_pos(front)) * 2 / 3 + c) >> 8;
     pf_cast.s = MIN(s * MIN(front_alpha, 256) >> 8, 252);
     pf_cast.edge = left ? x0 : x1;
     pf_cast.w = PF_CAST_W_SIDE
@@ -4106,7 +4136,7 @@ static void pf_floor_shadow(int y, int h)
 
             if (!a || r < pf_col_bottom[x])
                 continue;
-            row[x] = fade_color(row[x], (256 - a) & 0x1fc, 0, 0);
+            row[x] = fade_dither(row[x], (256 - a) & 0x1fc, x, r);
         }
     }
 }
@@ -4182,11 +4212,9 @@ static void pf_vignette(int y, int h)
                 x = skip1;
             if (x >= LCD_WIDTH)
                 break;
-            /* A 2x2 ordered dither hides the steps the weight comes in. */
-            fa = ((pf_vig_x[x] * by >> 8) + ((x & 1) << 1) + ((r & 1) << 2)
-                  - 3) & 0x1fc;
+            fa = (pf_vig_x[x] * by >> 8) & 0x1fc;
             if (fa < 256)
-                row[x] = fade_color(row[x], fa, 0, 0);
+                row[x] = fade_dither(row[x], fa, x, r);
         }
     }
     pf_vignette_us += USEC_TIMER - t0;
