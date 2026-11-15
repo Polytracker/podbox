@@ -629,14 +629,26 @@ static const char *colour_text(unsigned int c, char *buf, int len)
 
     if (w)
     {
-        int n = snprintf(buf, len, "%s", names[w->kind]);
+        int n = w->kind == COLOR_WORD_PLAIN
+                ? snprintf(buf, len, "%02x%02x%02x", RGB_UNPACK_RED(w->plain),
+                           RGB_UNPACK_GREEN(w->plain),
+                           RGB_UNPACK_BLUE(w->plain))
+                : snprintf(buf, len, "%s", names[w->kind]);
 
         if (w->bound && n < len)
             n += snprintf(buf + n, len - n, "%c%u", w->bound > 0 ? '>' : '<',
                           w->tone);
         if (w->shade && n < len)
             n += snprintf(buf + n, len - n, ".%u", w->shade - 1);
-        if (w->has_fallback && n < len)
+        if (w->has_fallback && w->fallback_from != COLOR_FALLBACK_COLOUR
+            && n < len)
+        {
+            n += snprintf(buf + n, len - n, ":%s",
+                          w->fallback_from == COLOR_FALLBACK_FG ? "fg" : "bg");
+            if (w->fallback_mix && n < len)
+                snprintf(buf + n, len - n, ".%u", w->fallback_mix - 1);
+        }
+        else if (w->has_fallback && n < len)
             snprintf(buf + n, len - n, ":%02x%02x%02x",
                      RGB_UNPACK_RED(w->fallback),
                      RGB_UNPACK_GREEN(w->fallback),

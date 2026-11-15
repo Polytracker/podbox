@@ -965,10 +965,13 @@ An image drawn behind everything. Loading a theme replaces it, and a theme that
 names none clears it rather than keeping the last one.
 
 [foreground color]
-The colour of text and lines. Reset by loading a theme.
+The colour of text and lines. Where the album's colours are in use, a theme
+like Scrim takes those instead, so this shows only with Dynamic Colors off or
+on screens it leaves alone. Reset by loading a theme.
 
 [background color]
-The colour behind them. Reset by loading a theme.
+The colour behind them, shown in the same places as the Foreground Colour.
+Reset by loading a theme.
 
 [selector type]
 How the highlighted row is marked: a pointer beside it, the row inverted, or a
@@ -1043,6 +1046,9 @@ over. A theme-author setting.
 Recolours the interface from the artwork of whatever is playing. A skin not
 written for it will look wrong, since it cannot know what its colours will
 become.
+
+Off leaves the menus in two plain colours, the Foreground and Background
+Colour: in Scrim, plain text on a solid background, with no blurred cover.
 
 [dynamic colors background]
 Which of the album's two colours becomes the background. Auto takes the one
