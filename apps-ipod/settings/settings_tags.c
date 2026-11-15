@@ -266,6 +266,8 @@ static const struct tag_row tag_rows[] = {
 { "album covers floor shadow",    TAG_APPEARANCE,                "carousel shadow" },
 { "album covers shadow distance", TAG_ADVANCED|TAG_APPEARANCE,   "carousel shadow" },
 { "album covers cover shadow",    TAG_APPEARANCE,                "carousel shadow" },
+{ "album covers shadow fade",     TAG_ADVANCED|TAG_APPEARANCE,   "carousel shadow fade time" },
+{ "album covers vignette",        TAG_APPEARANCE,                "carousel shadow lighting dark edges" },
 { "album covers side blur",       TAG_APPEARANCE,                "carousel blur depth" },
 { "album covers smooth edges",    TAG_APPEARANCE,                "carousel antialias jagged" },
 { "album covers show stats",      TAG_ADVANCED|TAG_SYSTEM,       "carousel frame rate speed" },

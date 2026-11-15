@@ -27844,3 +27844,31 @@
     *: "Smooth Edges"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_CAROUSEL_VIGNETTE
+  desc: in Carousel settings: how much the edges of the screen are darkened behind and over the covers
+  user: core
+  <source>
+    *: "Vignette"
+  </source>
+  <dest>
+    *: "Vignette"
+  </dest>
+  <voice>
+    *: "Vignette"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_SHADOW_FADE
+  desc: in Carousel settings: how long the middle cover's shadows take to fade in after it stops
+  user: core
+  <source>
+    *: "Shadow Fade-In"
+  </source>
+  <dest>
+    *: "Shadow Fade-In"
+  </dest>
+  <voice>
+    *: "Shadow Fade-In"
+  </voice>
+</phrase>
