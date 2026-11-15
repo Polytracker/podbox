@@ -1206,6 +1206,19 @@ written, so the skin looks as designed until something plays:
 %Vf(vivid>40.75:2a7fd6)
 ```
 
+Write `:fg` or `:bg` instead to fall back to the owner's Foreground or
+Background Colour setting, unbounded, so the screen follows those settings
+whenever the album's colours are not in use. `:fg.NN` is the Foreground
+Colour taken `NN` percent of the way from the Background Colour, for a
+dimmer second tone: `:fg.74` of white on black is `bdbdbd`. A plain colour takes one too:
+`ffffff:fg` is white like `!ffffff` with the album's colours, and the
+Foreground Colour without them.
+
+```
+%Vb(dominant<15:bg)                     # background
+%?Lc<%Vf(ffffff:fg)|%Vf(vivid>85:fg.74)>   # selected row, other rows
+```
+
 The parts go in that order: word, bound, shade, fallback. Like `!`, the words
 are skin-only; a `.cfg` does not take them.
 

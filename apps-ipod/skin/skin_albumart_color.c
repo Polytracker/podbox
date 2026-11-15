@@ -1890,6 +1890,8 @@ static unsigned int word_base(const struct color_word *w)
     unsigned int black = LCD_RGBPACK(0, 0, 0);
     bool accent_lighter;
 
+    if (w->kind == COLOR_WORD_PLAIN)
+        return w->plain;
     if (w->kind == COLOR_WORD_ACCENT)
         return cache.accent;
     if (w->kind == COLOR_WORD_DOMINANT)
@@ -1917,7 +1919,17 @@ static unsigned int resolve_word(unsigned int original, bool palette)
     if (!w)
         return original & ~COLOR_WORD;  /* not reached: parsed as a word */
     if (!palette && w->has_fallback)
+    {
+        if (w->fallback_from == COLOR_FALLBACK_FG && w->fallback_mix)
+            return color_blend(global_settings.bg_color,
+                               global_settings.fg_color,
+                               ((w->fallback_mix - 1) * 256) / 100);
+        if (w->fallback_from == COLOR_FALLBACK_FG)
+            return global_settings.fg_color;
+        if (w->fallback_from == COLOR_FALLBACK_BG)
+            return global_settings.bg_color;
         return w->fallback;
+    }
     if (word_from[i] == from)
         return word_out[i];
 

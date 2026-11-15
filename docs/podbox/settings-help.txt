@@ -965,10 +965,13 @@ An image drawn behind everything. Loading a theme replaces it, and a theme that
 names none clears it rather than keeping the last one.
 
 [foreground color]
-The colour of text and lines. Reset by loading a theme.
+The colour of text and lines. Where the album's colours are in use, a theme
+like Scrim takes those instead, so this shows only with Dynamic Colors off or
+on screens it leaves alone. Reset by loading a theme.
 
 [background color]
-The colour behind them. Reset by loading a theme.
+The colour behind them, shown in the same places as the Foreground Colour.
+Reset by loading a theme.
 
 [selector type]
 How the highlighted row is marked: a pointer beside it, the row inverted, or a
@@ -1045,8 +1048,9 @@ written for it will look wrong, since it cannot know what its colours will
 become.
 
 Now Playing Only keeps the album's colours to Now Playing, Album Covers and
-Lyrics; the menus keep the theme's. Scrim also leaves the blurred cover out of
-its menus.
+Lyrics. Off, and the other screens in Now Playing Only, show two plain colours,
+the Foreground and Background Colour: in Scrim, plain text on a solid
+background, with no blurred cover.
 
 [dynamic colors background]
 Which of the album's two colours becomes the background. Auto takes the one
