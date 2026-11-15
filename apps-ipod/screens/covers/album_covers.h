@@ -67,7 +67,8 @@ enum year_sort_order_values {
 enum carousel_background_values {
     CAROUSEL_BG_FOREGROUND = 0,  /* the status bar's colour */
     CAROUSEL_BG_BACKGROUND,      /* the same background as every other screen */
-    CAROUSEL_BG_CUSTOM           /* album_covers_custom_color */
+    CAROUSEL_BG_CUSTOM,          /* album_covers_custom_color */
+    CAROUSEL_BG_BLURRED          /* the playing album's art, blurred */
 };
 
 /* selected_file: jump to this file's album on open; NULL for the normal entry
