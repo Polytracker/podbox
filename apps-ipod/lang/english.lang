@@ -27816,3 +27816,31 @@
     *: "Show Frame Rate"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_CAROUSEL_SIDE_BLUR
+  desc: in Carousel settings: how blurred the covers either side of the middle one are
+  user: core
+  <source>
+    *: "Side Blur"
+  </source>
+  <dest>
+    *: "Side Blur"
+  </dest>
+  <voice>
+    *: "Side Blur"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_SMOOTH_EDGES
+  desc: in Carousel settings: smooth the stepped top and bottom edges of the angled covers
+  user: core
+  <source>
+    *: "Smooth Edges"
+  </source>
+  <dest>
+    *: "Smooth Edges"
+  </dest>
+  <voice>
+    *: "Smooth Edges"
+  </voice>
+</phrase>

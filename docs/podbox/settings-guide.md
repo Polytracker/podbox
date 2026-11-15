@@ -449,6 +449,8 @@ Also reached as **Appearance** under `Settings > Playback > Now Playing Screen`.
 | Floor Shadow | How dark the shadow on the ground below the covers is, darkest under the middle one. Off removes it. It cannot show on a black background. | 70% |  |
 | Shadow Distance | How far below the covers the floor shadow reaches. It fades out towards its lower edge. | 10 px | **Adv** |
 | Cover Shadow | How dark the shadow each cover casts on the covers behind it is. The middle cover's is the darker and wider; the side covers cast two-thirds as much. Off removes it, which also makes the carousel slightly quicker to draw. | 75% |  |
+| Side Blur | How blurred the covers either side of the middle one are, more towards the edges of the screen; the middle cover stays sharp. Off removes it. Each cover then takes a quarter more memory, so fewer stay loaded. | 2 |  |
+| Smooth Edges | Smooths the stepped top and bottom edges of the angled covers. Costs very little. | Yes |  |
 | View Mode | 3D angles the covers away on both sides. Flat lays them face-on and the same size, in two piles either side of the current one. | 3D |  |
 | 3D Centre Margin | The gap between the front cover and its neighbours in the 3D view. | 0 | **Adv** |
 | 3D Slide Tuck | How far the side covers stack back behind the front one in the 3D view. | 32 | **Adv** |
