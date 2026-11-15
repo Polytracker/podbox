@@ -822,6 +822,11 @@ depends on the size of the box. Treat it as a dial rather than a measurement:
 `blur8` is twice as soft as `blur4` in any box, and the same amount reads softer
 in a large box than a small one.
 
+**A blurring `%Cl` has a picture at boot.** With **Dynamic Colors** on, it is
+drawn from the cached thumbnail of the album the player was left on, until
+playback buffers the real cover. A `%Cl` without `blur` draws nothing until
+then, and `%?C` stays false, as before.
+
 **`lighter` and `darker` scale, they do not slide.** The amount is a percentage
 of what the picture already is, not a distance toward an end of the scale:
 `lighter50` is half as bright again, `lighter200` three times as bright, and only
