@@ -65,6 +65,8 @@ MENUITEM_SETTING(album_covers_shadow_distance, &global_settings.album_covers_sha
 MENUITEM_SETTING(album_covers_cover_shadow, &global_settings.album_covers_cover_shadow, NULL);
 MENUITEM_SETTING(album_covers_show_stats, &global_settings.album_covers_show_stats, NULL);
 MENUITEM_SETTING(album_covers_side_blur, &global_settings.album_covers_side_blur, NULL);
+MENUITEM_SETTING(album_covers_vignette, &global_settings.album_covers_vignette, NULL);
+MENUITEM_SETTING(album_covers_shadow_fade, &global_settings.album_covers_shadow_fade, NULL);
 MENUITEM_SETTING(album_covers_smooth_edges, &global_settings.album_covers_smooth_edges, NULL);
 MENUITEM_SETTING(album_covers_scroll_speed, &global_settings.album_covers_scroll_speed, NULL);
 MENUITEM_SETTING(album_covers_random_spin, &global_settings.album_covers_random_spin, NULL);
@@ -231,6 +233,8 @@ MAKE_MENU(album_covers_filter_menu, ID2P(LANG_ARTWORK_FILTER), NULL, Icon_NOICON
             &album_covers_floor_shadow,                                 \
             &album_covers_shadow_distance,                              \
             &album_covers_cover_shadow,                                 \
+            &album_covers_shadow_fade,                                  \
+            &album_covers_vignette,                                     \
             &album_covers_side_blur,                                    \
             &album_covers_smooth_edges,                                 \
             &album_covers_view_mode,                                    \

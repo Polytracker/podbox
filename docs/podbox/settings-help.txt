@@ -960,14 +960,25 @@ How dark the shadow each cover casts on the covers behind it is. The middle
 cover's is the darker and wider; the side covers cast two-thirds as much. Off
 removes it, which also makes the carousel slightly quicker to draw.
 
+[album covers shadow fade]
+How long the middle cover's darker shadows take to fade in once it stops.
+The carousel keeps drawing for that long after each stop; 0 shows them at
+once.
+
+[album covers vignette]
+Darkens the edges and corners of the screen, behind and over the covers, so the
+middle cover stands out. It stays put as the covers move, and the caption text
+is not darkened. Off removes it; a cheaper alternative to the shadows.
+
 [album covers side blur]
 How blurred the covers either side of the middle one are, more towards the
 edges of the screen; the middle cover stays sharp. Off removes it. Each cover
 then takes a quarter more memory, so fewer stay loaded.
 
 [album covers smooth edges]
-Smooths the stepped top and bottom edges of the angled covers. Costs very
-little.
+Smooths the stepped top and bottom edges of the angled covers, blending the
+last 1 to 3 rows at each edge; more is softer. Off leaves them stepped. Costs
+very little.
 
 [album covers show stats]
 Shows frame timings in place of the caption: frames a second and the time each

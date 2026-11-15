@@ -779,7 +779,9 @@ struct user_settings
     int  album_covers_cover_shadow;
     bool album_covers_show_stats;   /* frame timings in the caption's place */
     int  album_covers_side_blur;    /* 0 is off */
-    bool album_covers_smooth_edges;
+    int  album_covers_vignette;     /* 0 is off */
+    int  album_covers_shadow_fade;  /* ms the middle cover's shadows fade in */
+    int  album_covers_smooth_edges; /* rows blended at an edge, 0 is off */
     /* The three below shape the tilted view only; flat mode ignores them and
      * the menu hides them. */
     int  album_covers_center_margin;
