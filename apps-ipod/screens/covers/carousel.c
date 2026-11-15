@@ -3335,23 +3335,45 @@ static void show_random_slide(void)
  * which of the two is above the other, and that is the handover. */
 /* Piles taken all the way to the background have nothing left to draw, and
  * drawing them anyway would paint background over what is behind them. */
+/* How near the centre a cover is, out of 256: all of it at the centre, none
+ * from the first side position out. The shadows a cover throws grow with it,
+ * so one sliding into the centre darkens by degrees rather than at once. */
+static int pf_centreness(const struct slide_data *slide)
+{
+    PFreal span = flat_view() ? PF_PILE_CX : offsetX;
+    PFreal d = (slide->cx >= 0) ? slide->cx : -slide->cx;
+
+    if (span <= 0)
+        return slide == &center_slide ? 256 : 0;
+    if (d >= span)
+        return 0;
+    return 256 - (int)((d << 8) / span);
+}
+
+/* A slide's floor-shadow weight, from a side cover's up to the centre's. */
+static int pf_weight_of(const struct slide_data *slide)
+{
+    return PF_SIDE_WEIGHT
+           + ((256 - PF_SIDE_WEIGHT) * pf_centreness(slide) >> 8);
+}
+
 /* Puts the slide about to be drawn under the shadow of `front`, the cover
  * drawn over it: its edge on the side facing the slide, `left` for a slide
  * left of it. None if Cover Shadow is off or `front` is not drawn. */
-static void pf_cast_from(struct slide_data *front, int front_alpha,
-                         bool centre, bool left)
+static void pf_cast_from(struct slide_data *front, int front_alpha, bool left)
 {
     int x0, x1, s = global_settings.album_covers_cover_shadow;
+    int c = pf_centreness(front);
 
     pf_cast.s = 0;
     if (s <= 0 || front_alpha <= 0 || !slide_x_range(front, &x0, &x1))
         return;
-    s = s * 256 / 100;
-    if (!centre)
-        s = s * 2 / 3;
+    /* Two thirds at the side, all of it at the centre. */
+    s = (s * 256 / 100) * (512 + c) / 768;
     pf_cast.s = MIN(s * MIN(front_alpha, 256) >> 8, 252);
     pf_cast.edge = left ? x0 : x1;
-    pf_cast.w = centre ? PF_CAST_W_CENTRE : PF_CAST_W_SIDE;
+    pf_cast.w = PF_CAST_W_SIDE
+              + ((PF_CAST_W_CENTRE - PF_CAST_W_SIDE) * c >> 8);
     pf_cast.left = left;
 }
 
@@ -3362,16 +3384,11 @@ static void flat_draw(struct slide_data *slide)
     if (slide->alpha <= 0)
         return;
     if (slide == &center_slide)
-    {
         pf_cast.s = 0;
-        pf_slide_weight = 256;
-    }
     else
-    {
-        pf_cast_from(&center_slide, center_slide.alpha, true,
+        pf_cast_from(&center_slide, center_slide.alpha,
                      slide->cx < center_slide.cx);
-        pf_slide_weight = PF_SIDE_WEIGHT;
-    }
+    pf_slide_weight = pf_weight_of(slide);
     render_slide(slide, slide->alpha);
     pf_cast.s = 0;
 }
@@ -3396,7 +3413,7 @@ static void flat_render(void)
     if (pf_flat_handover) {
         /* the arriving card is on top: nothing shades it */
         flat_draw(&center_slide);
-        pf_slide_weight = 256;
+        pf_slide_weight = pf_weight_of(arriving);
         if (arriving->alpha > 0)
             render_slide(arriving, arriving->alpha);
     } else {
@@ -3596,13 +3613,12 @@ static void coverflow_render(void)
     cull_side(left_slides, left_alpha, center_alpha, left_to, false);
     cull_side(right_slides, right_alpha, center_alpha, right_from, true);
 
-    pf_slide_weight = PF_SIDE_WEIGHT;
     for (index = nleft - 1; index >= 0; index--)
         if (left_alpha[index] > 0)
         {
             pf_cast_from(index ? &left_slides[index - 1] : &center_slide,
-                         index ? left_alpha[index - 1] : center_alpha,
-                         index == 0, true);
+                         index ? left_alpha[index - 1] : center_alpha, true);
+            pf_slide_weight = pf_weight_of(&left_slides[index]);
             render_slide_clipped(&left_slides[index], left_alpha[index],
                                  0, left_to[index]);
         }
@@ -3610,20 +3626,33 @@ static void coverflow_render(void)
         if (right_alpha[index] > 0)
         {
             pf_cast_from(index ? &right_slides[index - 1] : &center_slide,
-                         index ? right_alpha[index - 1] : center_alpha,
-                         index == 0, false);
+                         index ? right_alpha[index - 1] : center_alpha, false);
+            pf_slide_weight = pf_weight_of(&right_slides[index]);
             render_slide_clipped(&right_slides[index], right_alpha[index],
                                  right_from[index], LCD_WIDTH);
         }
+    /* Once the arriving cover is drawn over the centre one, it is the one
+     * casting the shadow. */
+    if (redraw_right_0)
+        pf_cast_from(&right_slides[0], 256, true);
+    else if (redraw_left_0)
+        pf_cast_from(&left_slides[0], 256, false);
+    else
+        pf_cast.s = 0;
+    pf_slide_weight = pf_weight_of(&center_slide);
+    render_slide(&center_slide, center_alpha);
     pf_cast.s = 0;
 
-    pf_slide_weight = 256;
-    render_slide(&center_slide, center_alpha);
-
     if (redraw_right_0)
+    {
+        pf_slide_weight = pf_weight_of(&right_slides[0]);
         render_slide(&right_slides[0], 256);
+    }
     else if (redraw_left_0)
+    {
+        pf_slide_weight = pf_weight_of(&left_slides[0]);
         render_slide(&left_slides[0], 256);
+    }
 }
 
 /* The rows the covers will disturb this frame: the ones they can reach now,
@@ -3663,7 +3692,9 @@ static void cover_rows(int *y0, int *y1)
 
 /* Darkens the ground under the covers, within the band [y, y + h) of the
  * viewport the frame cleared: below each column's lowest cover row, fading
- * out with depth and softened sideways across the edges of the covers. */
+ * out with depth and softened sideways across the edges of the covers. Where
+ * the covers' area ends before the shadow would, the fade is squeezed into
+ * the rows there are, so it always reaches nothing rather than stopping. */
 static void pf_floor_shadow(int y, int h)
 {
     static short bottom[LCD_WIDTH];
@@ -3673,17 +3704,20 @@ static void pf_floor_shadow(int y, int h)
     const int len = dist + soft;
     const int s = global_settings.album_covers_floor_shadow * 256 / 100;
     /* Clipped to the band, and to the covers' own area, in buffer rows */
+    const int floor_y = pf_half_height + pf_lower_half;
     const int lo = MAX(0, y - pf_draw_y_shift);
-    const int hi = MIN(pf_half_height + pf_lower_half,
-                       y + h - pf_draw_y_shift);
+    const int hi = MIN(floor_y, y + h - pf_draw_y_shift);
     int profile[20 + PF_SHADOW_SOFT];
     int x, k, last, lastx, sum;
 
-    /* Full strength down to dist - soft, then fading to nothing at
-     * dist + soft. */
+    /* Full strength down to dist - soft, then easing out to nothing at
+     * dist + soft, squared so the tail has no visible end. */
     for (k = 0; k < len; k++)
-        profile[k] = (k < dist - soft) ? 256
-                   : MIN(256, (len - k) * 256 / (2 * soft));
+    {
+        int u = MIN(256, (len - k) * 256 / (2 * soft));
+
+        profile[k] = (k < dist - soft) ? 256 : u * u >> 8;
+    }
 
     /* Columns beside a cover take its bottom row, so the softened edge has
      * somewhere to go: nearest to the left first, then to the right. */
@@ -3718,13 +3752,19 @@ static void pf_floor_shadow(int y, int h)
     {
         int d0 = s * strength[x] >> 8;
         int r0 = bottom[x];
+        int rows, step;
 
         if (d0 <= 0 || r0 < 0)
             continue;
-        for (k = MAX(0, lo - r0); k < len && r0 + k < hi; k++)
+        rows = MIN(len, floor_y - r0);
+        if (rows <= 0)
+            continue;
+        step = (len << 8) / rows;   /* profile rows per row, 8 bits */
+        for (k = MAX(0, lo - r0); k < rows && r0 + k < hi; k++)
         {
             pix_t *px = &buffer[(r0 + k) * BUFFER_WIDTH + x];
-            unsigned int fa = (256 - (d0 * profile[k] >> 8)) & 0x1fc;
+            unsigned int fa = (256 - (d0 * profile[k * step >> 8] >> 8))
+                              & 0x1fc;
 
             *px = fade_color(*px, fa, 0, 0);
         }
