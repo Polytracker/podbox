@@ -281,6 +281,7 @@ viewers/lyric_viewer/lyric_viewer.c
 /* The playing artist's bio, from the files the PC tool writes into
  * /Artwork/Bios. */
 viewers/artist_bio/artist_bio.c
+viewers/artist_bio/appearances.c
 
 /* Streaming text-extraction engine behind the core-linked text viewer. Turns
  * plain/markdown/html/rtf/fb2/epub/docx/pdf into a stream of UTF-8. Platform

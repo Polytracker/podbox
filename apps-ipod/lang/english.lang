@@ -28040,3 +28040,17 @@
     *: "on"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_LINER_NOTES_NAMES_SCROLL
+  desc: Liner Notes settings: whether the row of page names at the top goes up with the text
+  user: core
+  <source>
+    *: "Scroll Page Names"
+  </source>
+  <dest>
+    *: "Scroll Page Names"
+  </dest>
+  <voice>
+    *: "Scroll Page Names"
+  </voice>
+</phrase>

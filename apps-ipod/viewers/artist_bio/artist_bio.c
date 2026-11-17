@@ -54,6 +54,9 @@
 #include "skin/skin_albumart_color.h"  /* dynamic_colors_resolve */
 #include "metadata/art_name.h"
 #include "metadata/tag_trim.h"
+#include "database/tagcache.h"
+#include "screens/browse/browser_db.h"
+#include "appearances.h"
 #include "input/action.h"
 #include "system/activity.h"
 #include "system/shutdown.h"      /* default_event_handler */
@@ -133,6 +136,9 @@ static struct
     int pos, target;           /* scroll offset, and where it is heading */
     bool found;
     int page;                  /* enum ab_page */
+    bool has[AB_PAGES];        /* each page's file was found */
+    char *links;               /* Credits: Other Appearances' lines, or NULL */
+    int clip;                  /* text hidden above this: the fixed names */
     int backdrop_handle;       /* Blurred Art: the screen behind the text */
     fb_data *backdrop;         /* NULL without one */
     char names[2][MAX_PATH];   /* album artist, artist */
@@ -152,8 +158,10 @@ static const char *ab_dir(void)
 
 /* ---- the pages -------------------------------------------------------- */
 
+static bool ab_find(void);
+
 /* Whether a page is switched on and has something to look for */
-static bool ab_page_ok(int page)
+static bool ab_page_wanted(int page)
 {
     const struct user_settings *gs = &global_settings;
 
@@ -169,6 +177,26 @@ static bool ab_page_ok(int page)
             return gs->liner_notes_credits && ab.album[0];
     }
     return false;
+}
+
+/* Whether a page is shown: switched on, and its file found */
+static bool ab_page_ok(int page)
+{
+    return ab.has[page];
+}
+
+/* Looks for each wanted page's file: a page with none is left out. Most
+ * are found by name at once; a miss reads that page's folder. */
+static void ab_scan(void)
+{
+    int keep = ab.page, i;
+
+    for (i = 0; i < AB_PAGES; i++)
+    {
+        ab.page = i;
+        ab.has[i] = ab_page_wanted(i) && ab_find();
+    }
+    ab.page = keep;
 }
 
 /* The next page shown after `page` in direction dir, or -1 */
@@ -801,16 +829,17 @@ static char *ab_tag(char *line, const char *key)
     return !strncmp(line, key, n) && line[n] == '\t' ? line + n + 1 : NULL;
 }
 
-/* "Track 3, Let's Dance (2018 Remaster)" with the album trimmed */
+/* "Track 3 · Let's Dance (2018 Remaster)" with the album trimmed */
 static char *ab_trim_facts(char *facts, char *buf, int size)
 {
-    char *comma = strstr(facts, ", ");
+    static const char dot[] = " \xc2\xb7 ";
+    char *sep = strstr(facts, dot);
     char album[MAX_PATH];
 
-    if (!global_settings.liner_notes_trim || !comma)
+    if (!global_settings.liner_notes_trim || !sep)
         return facts;
-    snprintf(buf, size, "%.*s, %s", (int)(comma - facts), facts,
-             ab_trim(comma + 2, album, sizeof album));
+    snprintf(buf, size, "%.*s%s%s", (int)(sep - facts), facts, dot,
+             ab_trim(sep + sizeof dot - 1, album, sizeof album));
     return buf;
 }
 
@@ -868,7 +897,10 @@ static int ab_layout_text_page(char *p, int width, char *spare, int room)
         else if ((v = ab_tag(line, "#sources")))
             y = ab_wrap(v, AB_FONT_SUB, y + body_h / 2, width);
         else if (!strcmp(line, "#links"))
+        {
+            ab.links = p;
             break;
+        }
         else if (line[0] == '#' && line[1] == '#' && line[2] == ' ')
             y = ab_wrap(line + 3, AB_FONT_HEAD, y + body_h / 2, width)
                 + body_h / 4;
@@ -974,9 +1006,11 @@ static void ab_open(void)
     ab.nlines = 0;
     ab.height = 0;
     ab.banner.data = NULL;
+    ab.links = NULL;
+    ab.clip = global_settings.liner_notes_names_scroll ? 0 : AB_STRIP;
     ab.tvp = ab.vp;
-    ab.tvp.y += AB_STRIP;
-    ab.tvp.height -= AB_STRIP;
+    ab.tvp.y += ab.clip;
+    ab.tvp.height -= ab.clip;
     if ((ab.page == AB_TRACK || ab.page == AB_CREDITS) && ab_blurred())
     {
         /* drawn over the album's banner, blurred */
@@ -1031,13 +1065,15 @@ static void ab_draw_empty(struct screen *d)
 }
 
 /* The names of the pages shown, across the top, this one's in the text
- * colour. Over the banner on Bio and Album; the text scrolls under them. */
+ * colour and underlined. Over the banner on Bio and Album. The text scrolls
+ * under them, or with Scroll Page Names they go up with it. */
 static void ab_draw_strip(struct screen *d)
 {
     static const int names[AB_PAGES] = {
         LANG_LINER_NOTES_BIO, LANG_ID3_ALBUM, LANG_TRACK, LANG_CREDITS
     };
     int font = ab.font[AB_FONT_SUB], width[AB_PAGES], total = 0, x, y, i;
+    int h = font_get(font)->height;
 
     for (i = 0; i < AB_PAGES; i++)
     {
@@ -1050,7 +1086,11 @@ static void ab_draw_strip(struct screen *d)
         }
     }
     x = (ab.vp.width - total + AB_STRIP_GAP) / 2;
-    y = (AB_STRIP - font_get(font)->height) / 2 + 1;
+    y = (AB_STRIP - font_get(font)->height) / 2;
+    if (!ab.clip)
+        y -= ab.pos;
+    if (y + AB_STRIP <= 0)
+        return;
     ab.vp.font = font;
     for (i = 0; i < AB_PAGES; i++)
     {
@@ -1061,9 +1101,13 @@ static void ab_draw_strip(struct screen *d)
             /* a shadow, so the names read on a light photo */
             d->set_foreground(LCD_BLACK);
             d->putsxy(x + 1, y + 1, (const unsigned char *)str(names[i]));
+            if (i == ab.page)
+                d->fillrect(x + 1, y + h + 1, width[i], 2);
         }
         d->set_foreground(i == ab.page ? ab.fg : ab.dim);
         d->putsxy(x, y, (const unsigned char *)str(names[i]));
+        if (i == ab.page)
+            d->fillrect(x, y + h, width[i], 2);
         x += width[i] + AB_STRIP_GAP;
     }
 }
@@ -1116,23 +1160,23 @@ static void ab_draw(void)
 
         if (y >= ab.vp.height)
             break;
-        if (y + font_get(ab.font[l->font])->height <= AB_STRIP)
+        if (y + (int)font_get(ab.font[l->font])->height <= ab.clip)
             continue;
         memcpy(buf, l->text, len);
         buf[len] = '\0';
         ab.tvp.font = ab.font[l->font];
         d->set_foreground(l->ink == AB_INK_DIM ? ab.dim
                           : l->ink == AB_INK_SOFT ? ab.soft : ab.fg);
-        d->putsxy(AB_MARGIN + l->x, y - AB_STRIP, (const unsigned char *)buf);
+        d->putsxy(AB_MARGIN + l->x, y - ab.clip, (const unsigned char *)buf);
     }
     d->set_drawmode(DRMODE_SOLID);
     d->set_viewport(&ab.vp);
 
     if (ab_max_pos() > 0)
     {
-        int vh = ab.vp.height - AB_STRIP;
+        int vh = ab.vp.height - ab.clip;
         int th = MAX(vh * vh / ab.height, 12);
-        int ty = AB_STRIP + ab.pos * (vh - th) / ab_max_pos();
+        int ty = ab.clip + ab.pos * (vh - th) / ab_max_pos();
 
         d->set_foreground(ab.dim);
         d->fillrect(ab.vp.width - AB_BAR_W - 2, ty, AB_BAR_W, th);
@@ -1196,6 +1240,61 @@ static bool ab_go(int dir)
     return true;
 }
 
+/* Arms Music to open on the album `album` by `artist`, found by the key
+ * its cover is cached under. False when the library has no such album. */
+static bool ab_arm_album(const char *artist, const char *album)
+{
+    unsigned int key = art_name_album_hash(artist, album);
+    struct tagcache_album al;
+    int i, n = tagcache_album_count();
+
+    for (i = 0; key && i < n; i++)
+        if (tagcache_album_get(i, &al) && al.art_hash == key)
+        {
+            browser_db_enter_artist_album_tracks_on_next_load(
+                al.album_seek, al.artist_seek, album);
+            return true;
+        }
+    return false;
+}
+
+/* Select on Credits: Other Appearances. Returns a GO_TO_* code to leave
+ * with, or 0 to stay. */
+static int ab_appearances(void)
+{
+    struct appearances_ctx c = {
+        .vp = &ab.vp, .links = ab.links, .backdrop = ab.backdrop,
+        .fg = ab.fg, .bg = ab.bg, .body_font = ab.font[AB_FONT_BODY],
+        .small_font = ab.font[AB_FONT_SUB], .head_font = ab.font[AB_FONT_HEAD],
+    };
+    char artist[MAX_PATH], album[MAX_PATH];
+
+    switch (appearances_show(&c, artist, album, sizeof artist))
+    {
+        case APPEARANCES_ALBUM:
+            if (ab_arm_album(artist, album))
+                return GO_TO_DBBROWSER;
+            break;
+        case APPEARANCES_CREDITS:
+            ab_close();
+            strlcpy(ab.names[0], artist, sizeof ab.names[0]);
+            strlcpy(ab.album, album, sizeof ab.album);
+            ab.names[1][0] = ab.title[0] = '\0';
+            ab_scan();
+            ab.page = ab_page_ok(AB_CREDITS) ? AB_CREDITS
+                      : MAX(ab_page_step(-1, 1), AB_CREDITS);
+            ab.pos = ab.target = 0;
+            ab_open();
+            break;
+        case APPEARANCES_USB:
+            return GO_TO_ROOT;
+        case APPEARANCES_BACK:
+            break;
+    }
+    ab_draw();
+    return 0;
+}
+
 /* The button behind an ACTION_STD_OK or _CANCEL, for telling Right from
  * Select and Left from Menu */
 static int ab_button(void)
@@ -1236,6 +1335,7 @@ static int ab_menu(void)
 
     if (!global_settings.liner_notes)
         return AB_MENU_EMPTY;
+    ab_scan();
     if (!ab_page_ok(ab.page))
     {
         int page = ab_page_step(ab.page, 1);
@@ -1296,6 +1396,16 @@ static int ab_run(void)
             case ACTION_STD_OK:             /* Right: the next page */
                 if (ab_button() & BUTTON_RIGHT)
                     ab_go(1);
+                else if (ab.page == AB_CREDITS && ab.links && *ab.links)
+                {
+                    int go = ab_appearances();
+
+                    if (go)
+                    {
+                        ret = go;
+                        goto done;
+                    }
+                }
                 break;
 
             case ACTION_STD_CANCEL:         /* Left: the page before, or out */
@@ -1361,6 +1471,7 @@ static int ab_start(int page)
 
     if (!global_settings.liner_notes)
         return GO_TO_PREVIOUS;
+    ab_scan();
     if (!ab_page_ok(p))
     {
         p = ab_page_step(page, 1);

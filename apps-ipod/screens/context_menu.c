@@ -244,18 +244,29 @@ static int lyrics_run(void)
 MENUITEM_FUNCTION(lyrics_item, 0, ID2P(LANG_LYRICS),
                   lyrics_run, NULL, Icon_NOICON);
 
+/* The ONPLAY_ code for how the Liner Notes pages were left: Menu to the
+ * main menu, or an album chosen in Other Appearances to open in Music */
+static int liner_notes_result(int go_to)
+{
+    if (go_to == GO_TO_ROOT)
+        return ONPLAY_MAINMENU;
+    if (go_to == GO_TO_DBBROWSER)
+        return ONPLAY_GO_TO_LIBRARY;
+    return ONPLAY_OK;
+}
+
 /* The same pair for the artist bio */
 static int view_artist_bio(void)
 {
-    if (artist_bio() == GO_TO_ROOT)
-        return ONPLAY_MAINMENU;
-    return ONPLAY_OK;
+    return liner_notes_result(artist_bio());
 }
 
 static int artist_bio_run(void)
 {
-    if (artist_bio() == GO_TO_ROOT)
-        context_menu_result = ONPLAY_MAINMENU;
+    int ret = liner_notes_result(artist_bio());
+
+    if (ret != ONPLAY_OK)
+        context_menu_result = ret;
     return 0;
 }
 
@@ -292,8 +303,10 @@ static int artist_bio_row_run(void)
 
     if (!browser_db_current_artist_name(name, sizeof(name)))
         return 0;
-    if (artist_bio_of(name) == GO_TO_ROOT)
-        context_menu_result = ONPLAY_MAINMENU;
+    int ret = liner_notes_result(artist_bio_of(name));
+
+    if (ret != ONPLAY_OK)
+        context_menu_result = ret;
     return 0;
 }
 
@@ -314,15 +327,15 @@ MENUITEM_FUNCTION(artist_bio_row_item, 0, ID2P(LANG_ARTIST_BIO),
 /* Liner notes: the same screen for the playing album, or an album row's */
 static int view_liner_notes(void)
 {
-    if (liner_notes() == GO_TO_ROOT)
-        return ONPLAY_MAINMENU;
-    return ONPLAY_OK;
+    return liner_notes_result(liner_notes());
 }
 
 static int liner_notes_run(void)
 {
-    if (liner_notes() == GO_TO_ROOT)
-        context_menu_result = ONPLAY_MAINMENU;
+    int ret = liner_notes_result(liner_notes());
+
+    if (ret != ONPLAY_OK)
+        context_menu_result = ret;
     return 0;
 }
 
@@ -336,8 +349,10 @@ static int liner_notes_row_run(void)
     if (!browser_db_current_artist_name(artist, sizeof(artist)))
         artist[0] = '\0';
     browser_db_current_entry_name(album, sizeof(album));
-    if (liner_notes_of(artist, album) == GO_TO_ROOT)
-        context_menu_result = ONPLAY_MAINMENU;
+    int ret = liner_notes_result(liner_notes_of(artist, album));
+
+    if (ret != ONPLAY_OK)
+        context_menu_result = ret;
     return 0;
 }
 

@@ -1929,6 +1929,8 @@ const struct settings_list settings[] = {
                   "liner notes trim titles", NULL),
     OFFON_SETTING(0, liner_notes_icons, LANG_LINER_NOTES_ICONS, true,
                   "liner notes appearance icons", NULL),
+    OFFON_SETTING(0, liner_notes_names_scroll, LANG_LINER_NOTES_NAMES_SCROLL,
+                  false, "liner notes scroll page names", NULL),
     TEXT_SETTING(F_THEMESETTING|F_NEEDAPPLY,wps_file, "wps",
                      DEFAULT_WPSNAME, WPS_DIR "/", ".wps"),
     TEXT_SETTING(F_THEMESETTING|F_NEEDAPPLY,sbs_file, "sbs",
