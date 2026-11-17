@@ -28066,6 +28066,9 @@
   </dest>
   <voice>
     *: "Page Names Bar"
+  </voice>
+</phrase>
+<phrase>
   id: LANG_CAROUSEL_BG_BLURRED
   desc: in Carousel settings: Carousel Background choice, the playing album's art blurred
   user: core
