@@ -97,5 +97,12 @@ bool dynamic_colors_pending(void);
  * use. */
 bool dynamic_colors_roles(unsigned int *dominant, unsigned int *vivid);
 
+/* The same two colours for a picture of the caller's own rather than the
+ * playing album's, worked out now. False, and nothing written, when Dynamic
+ * Colors is off or the picture gives no palette. */
+struct bitmap;
+bool dynamic_colors_roles_of(const struct bitmap *bmp, unsigned int *dominant,
+                             unsigned int *vivid);
+
 
 #endif /* SKIN_ALBUMART_COLOR_H */

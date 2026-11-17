@@ -2070,6 +2070,31 @@ bool dynamic_colors_pending(void)
     return needs_extraction && global_settings.dynamic_colors;
 }
 
+bool dynamic_colors_roles_of(const struct bitmap *bmp, unsigned int *dominant,
+                             unsigned int *vivid)
+{
+    unsigned int black = LCD_RGBPACK(0, 0, 0);
+    struct found_palette p;
+    bool got;
+
+    if (!global_settings.dynamic_colors)
+        return false;
+    mutex_lock(&palette_lock);          /* the histogram is shared */
+    got = compute_palette(bmp, &p);
+    mutex_unlock(&palette_lock);
+    if (!got)
+        return false;
+    *dominant = p.dominant;
+    if (p.has_vivid)
+        *vivid = p.vivid;
+    else if (color_contrast(p.accent, black) >
+             color_contrast(p.dominant, black))
+        *vivid = p.accent;
+    else
+        *vivid = p.dominant;
+    return true;
+}
+
 bool dynamic_colors_roles(unsigned int *dominant, unsigned int *vivid)
 {
     unsigned int black = LCD_RGBPACK(0, 0, 0);

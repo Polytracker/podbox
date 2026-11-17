@@ -632,6 +632,17 @@ static void ab_load_banner(const char *dir, const char *stem,
     }
     core_shrink(ab.banner_handle, bm.data, used);
 
+    /* the Bio page's names take their accents from the artist's photo */
+    if (ab.page == AB_BIO && ab_blurred())
+    {
+        unsigned dominant, vivid;
+
+        if (dynamic_colors_roles_of(&bm, &dominant, &vivid))
+        {
+            ab.mark = color_tone_bound(vivid, 60, 1);
+            ab.other = color_tone_bound(vivid, 85, 1);
+        }
+    }
     if (ab_blurred())
         ab_make_backdrop(&bm);
     if (backdrop_only || !global_settings.artist_bio_banner)
