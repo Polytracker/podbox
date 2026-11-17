@@ -795,6 +795,8 @@ static bool do_non_text_tags(struct gui_wps *gwps, struct skin_draw_info *info,
                 if (aa)
                 {
                     aa->draw_handle = playback_current_aa_hid(aa->slot);
+                    if (aa->draw_handle < 0 && skin_albumart_seeded(aa))
+                        aa->draw_handle = 0;
                     aa->draw_win = PTRTOSKINOFFSET(skin_buffer, ad);
                 }
             }

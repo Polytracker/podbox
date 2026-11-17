@@ -43,6 +43,15 @@ enum color_word_kind
     COLOR_WORD_ACCENT,          /* the album's text colour */
     COLOR_WORD_DOMINANT,        /* the album's background colour */
     COLOR_WORD_VIVID,           /* the album's most colourful colour */
+    COLOR_WORD_PLAIN,           /* `rrggbb:fg`: that colour, as if written bare */
+};
+
+/* Where a word's colour comes from when the album's colours are not in use */
+enum color_word_fallback
+{
+    COLOR_FALLBACK_COLOUR,      /* `:rrggbb` */
+    COLOR_FALLBACK_FG,          /* `:fg`, the Foreground Colour setting */
+    COLOR_FALLBACK_BG,          /* `:bg`, the Background Colour setting */
 };
 
 /* What a skin wrote: `vivid>50.75:5ea8f0` is kind VIVID, bound +1, tone 50,
@@ -53,8 +62,13 @@ struct color_word
     signed char bound;          /* +1 for `>tone`, -1 for `<tone`, 0 none */
     unsigned char tone;         /* 0..100 */
     unsigned char shade;        /* `.NN` plus one; 0 is none */
-    bool has_fallback;          /* `:rrggbb` was written */
-    unsigned fallback;          /* that colour, native */
+    bool has_fallback;          /* `:rrggbb`, `:fg` or `:bg` was written */
+    unsigned char fallback_from; /* enum color_word_fallback */
+    unsigned char fallback_mix; /* `:fg.NN`: NN plus one, toward the
+                                 * Background Colour; 0 is none */
+    unsigned fallback;          /* the `:rrggbb` colour, native */
+    unsigned plain;             /* COLOR_WORD_PLAIN's colour, native */
+    bool plain_fixed;           /* written `!rrggbb`: the palette leaves it */
 };
 
 /* The word a parsed colour stands for, or NULL if it is a plain colour. */

@@ -60,6 +60,14 @@ MENUITEM_SETTING(album_covers_pile_offset, &global_settings.album_covers_pile_of
 MENUITEM_SETTING(album_covers_center_margin, &global_settings.album_covers_center_margin, tilt_only_callback);
 MENUITEM_SETTING(album_covers_slide_tuck, &global_settings.album_covers_slide_tuck, tilt_only_callback);
 MENUITEM_SETTING(album_covers_parallel_slides, &global_settings.album_covers_parallel_slides, tilt_only_callback);
+MENUITEM_SETTING(album_covers_floor_shadow, &global_settings.album_covers_floor_shadow, NULL);
+MENUITEM_SETTING(album_covers_shadow_distance, &global_settings.album_covers_shadow_distance, NULL);
+MENUITEM_SETTING(album_covers_cover_shadow, &global_settings.album_covers_cover_shadow, NULL);
+MENUITEM_SETTING(album_covers_show_stats, &global_settings.album_covers_show_stats, NULL);
+MENUITEM_SETTING(album_covers_side_blur, &global_settings.album_covers_side_blur, NULL);
+MENUITEM_SETTING(album_covers_vignette, &global_settings.album_covers_vignette, NULL);
+MENUITEM_SETTING(album_covers_shadow_fade, &global_settings.album_covers_shadow_fade, NULL);
+MENUITEM_SETTING(album_covers_smooth_edges, &global_settings.album_covers_smooth_edges, NULL);
 MENUITEM_SETTING(album_covers_scroll_speed, &global_settings.album_covers_scroll_speed, NULL);
 MENUITEM_SETTING(album_covers_random_spin, &global_settings.album_covers_random_spin, NULL);
 MENUITEM_SETTING(album_covers_transition_speed, &global_settings.album_covers_transition_speed, tilt_only_callback);
@@ -222,6 +230,13 @@ MAKE_MENU(album_covers_filter_menu, ID2P(LANG_ARTWORK_FILTER), NULL, Icon_NOICON
             &album_covers_background,                                   \
             &album_covers_custom_color_item,                            \
             &album_covers_statusbar,                                    \
+            &album_covers_floor_shadow,                                 \
+            &album_covers_shadow_distance,                              \
+            &album_covers_cover_shadow,                                 \
+            &album_covers_shadow_fade,                                  \
+            &album_covers_vignette,                                     \
+            &album_covers_side_blur,                                    \
+            &album_covers_smooth_edges,                                 \
             &album_covers_view_mode,                                    \
             /* Whichever mode is selected, its own settings follow it. */ \
             &album_covers_center_margin,                                \
@@ -230,7 +245,8 @@ MAKE_MENU(album_covers_filter_menu, ID2P(LANG_ARTWORK_FILTER), NULL, Icon_NOICON
             &album_covers_transition_speed,                             \
             &album_covers_pile_fade,                                    \
             &album_covers_pile_offset,                                  \
-            &album_covers_filter_menu
+            &album_covers_filter_menu,                                  \
+            &album_covers_show_stats
 MAKE_MENU(carousel_appearance_menu, ID2P(LANG_CAROUSEL_SETTINGS), NULL,
             Icon_NOICON, CAROUSEL_APPEARANCE_ITEMS);
 MAKE_MENU(carousel_appearance_link, ID2P(LANG_APPEARANCE), NULL, Icon_NOICON,

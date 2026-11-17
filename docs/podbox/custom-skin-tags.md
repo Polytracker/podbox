@@ -822,6 +822,11 @@ depends on the size of the box. Treat it as a dial rather than a measurement:
 `blur8` is twice as soft as `blur4` in any box, and the same amount reads softer
 in a large box than a small one.
 
+**A blurring `%Cl` has a picture at boot.** With **Dynamic Colors** on, it is
+drawn from the cached thumbnail of the album the player was left on, until
+playback buffers the real cover. A `%Cl` without `blur` draws nothing until
+then, and `%?C` stays false, as before.
+
 **`lighter` and `darker` scale, they do not slide.** The amount is a percentage
 of what the picture already is, not a distance toward an end of the scale:
 `lighter50` is half as bright again, `lighter200` three times as bright, and only
@@ -1204,6 +1209,22 @@ written, so the skin looks as designed until something plays:
 ```
 %Vf(vivid>40:5ea8f0)
 %Vf(vivid>40.75:2a7fd6)
+```
+
+Write `:fg` or `:bg` instead to fall back to the owner's Foreground or
+Background Colour setting, unbounded, so the screen follows those settings
+whenever the album's colours are not in use. `:fg.NN` is the Foreground
+Colour taken `NN` percent of the way from the Background Colour, for a
+dimmer second tone: `:fg.74` of white on black is `bdbdbd`. A plain colour takes one too:
+`ffffff:fg` is white with the album's colours, carried over by the palette
+like any other, and the Foreground Colour without them; `!ffffff:fg` stays
+white with the album's colours.
+
+```
+%Vb(dominant<15:bg)                         # background
+%?Lc<%Vf(!ffffff:fg)|%Vf(vivid>85:fg.74)>   # selected row, other rows
+%dr(0,0,320,35,ffffff:fg,-,12)              # a bar in the text colour
+%Vf(000000:bg)                              # and text on it
 ```
 
 The parts go in that order: word, bound, shade, fallback. Like `!`, the words

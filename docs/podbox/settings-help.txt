@@ -886,11 +886,13 @@ Whether the album name is drawn over the covers, and where.
 Shows the release year in the caption, before or after the album's name.
 
 [album covers background]
-Which colour fills the screen behind the covers: one of the theme's, which
-follows Dynamic Colours, or Custom, a colour of your own that stays put.
+What fills the screen behind the covers: one of the theme's colours, which
+follow Dynamic Colours; Custom, a colour of your own that stays put; or Blurred
+Art, the playing album's cover blurred, as Scrim's menus show it.
 
 Choosing Custom opens a colour picker; Custom Colour below it changes the colour
-later. The captions turn black or white to read on it.
+later. Blurred Art uses the last album played when nothing is playing, and the
+Background Colour while there is no cover to blur.
 
 [album covers statusbar]
 Draws the status bar over the carousel. Off gives the covers the whole screen.
@@ -944,6 +946,43 @@ the cover in the middle stands out. Zero leaves them solid.
 How far below the middle cover the Flat view's piles sit. A cover eases down
 onto its pile as it leaves and back up as it arrives.
 
+[album covers floor shadow]
+How dark the shadow on the ground below the covers is, darkest under the
+middle one. Off removes it. It cannot show on a black background.
+
+[album covers shadow distance]
+How far below the covers the floor shadow reaches. It fades out towards its
+lower edge.
+
+[album covers cover shadow]
+How dark the shadow each cover casts on the covers behind it is. The middle
+cover's is the darker and wider; the side covers cast two-thirds as much. Off
+removes it, which also makes the carousel slightly quicker to draw.
+
+[album covers shadow fade]
+How long the middle cover's darker shadows take to fade in once it stops.
+The carousel keeps drawing for that long after each stop; 0 shows them at
+once.
+
+[album covers vignette]
+Darkens the edges and corners of the screen, behind and over the covers, so the
+middle cover stands out. It stays put as the covers move, and the caption text
+is not darkened. Off removes it; a cheaper alternative to the shadows.
+
+[album covers side blur]
+How blurred the covers either side of the middle one are, more towards the
+edges of the screen; the middle cover stays sharp. Off removes it. Each cover
+then takes a quarter more memory, so fewer stay loaded.
+
+[album covers smooth edges]
+Smooths the stepped top and bottom edges of the angled covers, blending the
+last 1 to 3 rows at each edge; more is softer. Off leaves them stepped. Costs
+very little.
+
+[album covers show stats]
+Shows frame timings in place of the caption: frames a second and the time each
+part of a frame takes. For checking how fast the carousel draws.
+
 [wps]
 The skin drawn while music is playing. Part of a theme; loading a theme sets
 it.
@@ -964,10 +1003,13 @@ An image drawn behind everything. Loading a theme replaces it, and a theme that
 names none clears it rather than keeping the last one.
 
 [foreground color]
-The colour of text and lines. Reset by loading a theme.
+The colour of text and lines. Where the album's colours are in use, a theme
+like Scrim takes those instead, so this shows only with Dynamic Colors off or
+on screens it leaves alone. Reset by loading a theme.
 
 [background color]
-The colour behind them. Reset by loading a theme.
+The colour behind them, shown in the same places as the Foreground Colour.
+Reset by loading a theme.
 
 [selector type]
 How the highlighted row is marked: a pointer beside it, the row inverted, or a
@@ -1042,6 +1084,9 @@ over. A theme-author setting.
 Recolours the interface from the artwork of whatever is playing. A skin not
 written for it will look wrong, since it cannot know what its colours will
 become.
+
+Off shows two plain colours, the Foreground and Background Colour: in Scrim,
+plain text on a solid background, with no blurred cover.
 
 [dynamic colors background]
 Which of the album's two colours becomes the background. Auto takes the one

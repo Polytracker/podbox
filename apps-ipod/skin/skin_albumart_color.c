@@ -1214,6 +1214,44 @@ unsigned skin_albumart_gen(void)
     return filter_gen;
 }
 
+/* The resume point's cached thumbnail, kept from the boot-time palette read
+ * so a blurring %Cl has a picture before any art is buffered. Row-major, the
+ * thumbnail being stored column-major. Freed on the UI thread once real art
+ * is buffered. Filters rendered from it carry handle 0, which buflib never
+ * issues, and the generation current when they ran -- the first art load
+ * moves that on, so a render from the seed never outlives it. */
+static int seed_art = -1;
+static int seed_dim;
+
+bool skin_albumart_seeded(const struct skin_albumart *aa)
+{
+    return aa && aa->filter_handle > 0 && aa->filtered_art == 0
+           && aa->filtered_gen == filter_gen;
+}
+
+static void seed_keep(const fb_data *col_major, int dim)
+{
+    fb_data *dst;
+
+    seed_art = core_alloc((size_t)dim * dim * sizeof(fb_data));
+    if (seed_art <= 0)
+    {
+        seed_art = -1;
+        return;
+    }
+    seed_dim = dim;
+    dst = core_get_data(seed_art);
+    for (int x = 0; x < dim; x++)
+        for (int y = 0; y < dim; y++)
+            dst[y * dim + x] = *col_major++;
+}
+
+static void seed_drop(void)
+{
+    if (seed_art > 0)
+        seed_art = core_free(seed_art);
+}
+
 static bool art_filtered(int handle)
 {
     if (handle <= 0)
@@ -1319,8 +1357,10 @@ void skin_albumart_filter(int aa_slot, struct skin_albumart *aa)
         return;
 
     handle = playback_current_aa_hid(aa_slot);
-    if (handle < 0)
+    if (handle < 0 && !(resizes && seed_art > 0))
         return;                                  /* not buffered yet */
+    if (handle >= 0)
+        seed_drop();
 
     /* What text over this art will be drawn in: the colour `scrim:rrggbb`
      * named, else the album's accent when dynamic colours are on and have a
@@ -1344,6 +1384,27 @@ void skin_albumart_filter(int aa_slot, struct skin_albumart *aa)
         if (resizes && avoid != aa->filter_avoid)
             aa->filtered_art = -1;
         aa->filter_avoid = (short)avoid;
+    }
+
+    if (handle < 0)
+    {
+        if (aa->filtered_art == 0 && aa->filtered_gen == filter_gen)
+            return;                              /* seed already rendered */
+        core_pin(seed_art);
+        bmp = &(struct bitmap){ .width = seed_dim, .height = seed_dim,
+                                .format = FORMAT_NATIVE,
+                                .data = core_get_data(seed_art) };
+        if (filter->has_adaptive)
+        {
+            struct img_levels lv;
+
+            img_filter_measure((const fb_data *)bmp->data,
+                               bmp->width, bmp->height, &lv);
+            img_filter_adapt(filter, &lv, avoid);
+        }
+        render_filtered(aa, 0, bmp);
+        core_unpin(seed_art);
+        return;
     }
 
     if (resizes ? (aa->filtered_art == handle
@@ -1557,6 +1618,10 @@ void dynamic_colors_seed_resume(void)
     if (!palette_from_folder(global_status.resume_art_hash, dim))
         return;
 
+    /* palette_px still holds the thumbnail the palette came from; keeping it
+     * lets the theme's blurred backdrop come up with the colours. */
+    seed_keep(palette_px, dim);
+
     cache.needs_full_update = false;
     cache.needs_screen_clear = false;
     cache.change_tick = current_tick - AA_SETTLE_TICKS;
@@ -1649,6 +1714,17 @@ void dynamic_colors_check_extraction(int aa_slot)
          * nothing asks again. */
         if (current_tick - cache.track_change_tick > NO_ART_TIMEOUT)
             needs_extraction = false;
+    }
+    else if (!(audio_status() & AUDIO_STATUS_PLAY))
+    {
+        /* Nothing playing, which is not a track without art. This is where
+         * boot lands: settings_apply_skins() asks for an extraction before
+         * dynamic_colors_seed_resume() runs, and with no track there is
+         * nothing to extract from. Keep the palette -- the seeded one, or
+         * the last track's -- since reverting would also clear
+         * resume_art_hash, and the next boot would have nothing to seed
+         * from. A track starting asks again. */
+        needs_extraction = false;
     }
     else
     {
@@ -1878,6 +1954,8 @@ static unsigned int word_base(const struct color_word *w)
     unsigned int black = LCD_RGBPACK(0, 0, 0);
     bool accent_lighter;
 
+    if (w->kind == COLOR_WORD_PLAIN)
+        return w->plain;
     if (w->kind == COLOR_WORD_ACCENT)
         return cache.accent;
     if (w->kind == COLOR_WORD_DOMINANT)
@@ -1905,7 +1983,21 @@ static unsigned int resolve_word(unsigned int original, bool palette)
     if (!w)
         return original & ~COLOR_WORD;  /* not reached: parsed as a word */
     if (!palette && w->has_fallback)
+    {
+        if (w->fallback_from == COLOR_FALLBACK_FG && w->fallback_mix)
+            return color_blend(global_settings.bg_color,
+                               global_settings.fg_color,
+                               ((w->fallback_mix - 1) * 256) / 100);
+        if (w->fallback_from == COLOR_FALLBACK_FG)
+            return global_settings.fg_color;
+        if (w->fallback_from == COLOR_FALLBACK_BG)
+            return global_settings.bg_color;
         return w->fallback;
+    }
+    if (w->kind == COLOR_WORD_PLAIN)
+        return w->plain_fixed ? w->plain
+                              : resolve_mapped(w->plain, cache.accent,
+                                               cache.dominant);
     if (word_from[i] == from)
         return word_out[i];
 

@@ -673,6 +673,7 @@ static void draw_album_text(void)
          * not the FONT_UI constant -- see init()'s comment on pf_bold_font. */
         lcd_setfont(screens[SCREEN_MAIN].getuifont());
 
+        lcd_set_foreground(pf_fg2_color);
         get_album_artist(center_index, artisttxt, sizeof(artisttxt));
         artist_line = carousel_caption_fit(artisttxt, artist_fit,
                                            sizeof(artist_fit));
@@ -798,6 +799,8 @@ static int album_on_menu(void)
     int old_filter[CAROUSEL_FILTER_SLOTS];
     char old_chain[CAROUSEL_FILTER_MAX];
 
+    int old_blur = global_settings.album_covers_side_blur;
+
     memcpy(old_filter, global_settings.album_covers_filter, sizeof(old_filter));
     strmemccpy(old_chain, global_settings.album_covers_filter_chain,
                sizeof(old_chain));
@@ -830,7 +833,8 @@ static int album_on_menu(void)
      */
     if (memcmp(old_filter, global_settings.album_covers_filter,
                sizeof(old_filter))
-        || strcmp(old_chain, global_settings.album_covers_filter_chain))
+        || strcmp(old_chain, global_settings.album_covers_filter_chain)
+        || old_blur != global_settings.album_covers_side_blur)
         carousel_drop_slides();
 
     /* Re-apply the live geometry settings (zoom / margins / tilt). Cheap and

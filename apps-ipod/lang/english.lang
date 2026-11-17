@@ -28066,5 +28066,128 @@
   </dest>
   <voice>
     *: "Page Names Bar"
+  id: LANG_CAROUSEL_BG_BLURRED
+  desc: in Carousel settings: Carousel Background choice, the playing album's art blurred
+  user: core
+  <source>
+    *: "Blurred Art"
+  </source>
+  <dest>
+    *: "Blurred Art"
+  </dest>
+  <voice>
+    *: "Blurred Art"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_FLOOR_SHADOW
+  desc: in Carousel settings: how dark the shadow below the covers is
+  user: core
+  <source>
+    *: "Floor Shadow"
+  </source>
+  <dest>
+    *: "Floor Shadow"
+  </dest>
+  <voice>
+    *: "Floor Shadow"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_SHADOW_DISTANCE
+  desc: in Carousel settings: how far below the covers their shadow reaches
+  user: core
+  <source>
+    *: "Shadow Distance"
+  </source>
+  <dest>
+    *: "Shadow Distance"
+  </dest>
+  <voice>
+    *: "Shadow Distance"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_COVER_SHADOW
+  desc: in Carousel settings: how dark the shadow a 3D cover casts on the covers behind it is
+  user: core
+  <source>
+    *: "Cover Shadow"
+  </source>
+  <dest>
+    *: "Cover Shadow"
+  </dest>
+  <voice>
+    *: "Cover Shadow"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_SHOW_STATS
+  desc: in Carousel settings: show frame timings in place of the caption
+  user: core
+  <source>
+    *: "Show Frame Rate"
+  </source>
+  <dest>
+    *: "Show Frame Rate"
+  </dest>
+  <voice>
+    *: "Show Frame Rate"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_SIDE_BLUR
+  desc: in Carousel settings: how blurred the covers either side of the middle one are
+  user: core
+  <source>
+    *: "Side Blur"
+  </source>
+  <dest>
+    *: "Side Blur"
+  </dest>
+  <voice>
+    *: "Side Blur"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_SMOOTH_EDGES
+  desc: in Carousel settings: smooth the stepped top and bottom edges of the angled covers
+  user: core
+  <source>
+    *: "Smooth Edges"
+  </source>
+  <dest>
+    *: "Smooth Edges"
+  </dest>
+  <voice>
+    *: "Smooth Edges"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_VIGNETTE
+  desc: in Carousel settings: how much the edges of the screen are darkened behind and over the covers
+  user: core
+  <source>
+    *: "Vignette"
+  </source>
+  <dest>
+    *: "Vignette"
+  </dest>
+  <voice>
+    *: "Vignette"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_SHADOW_FADE
+  desc: in Carousel settings: how long the middle cover's shadows take to fade in after it stops
+  user: core
+  <source>
+    *: "Shadow Fade-In"
+  </source>
+  <dest>
+    *: "Shadow Fade-In"
+  </dest>
+  <voice>
+    *: "Shadow Fade-In"
   </voice>
 </phrase>

@@ -480,8 +480,9 @@ static bool parse_amount(const char **p, int max, int *out)
 }
 
 /* `accent`, `dominant` or `vivid`, then optionally `>NN` or `<NN`, `.NN`
- * and `:rrggbb`, in that order. Identical words share one table entry, so a
- * skin pays for the distinct colours it names, not for each use. */
+ * and `:rrggbb`, `:fg`, `:fg.NN` or `:bg`, in that order; or `rrggbb` or
+ * `!rrggbb` with one of those last four. Identical words share one table entry, so a skin pays for
+ * the distinct colours it names, not for each use. */
 static bool parse_word(const char *text, int *value)
 {
     static const char *const names[] = { "accent", "dominant", "vivid" };
@@ -503,16 +504,27 @@ static bool parse_word(const char *text, int *value)
         }
     }
     if (!p)
-        return false;
+    {
+        int plain;
+        const char *hex = text + (*text == '!');
 
-    if (*p == '>' || *p == '<')
+        /* A plain colour only with a fallback: without one it is a literal */
+        if (strlen(hex) < 7 || hex[6] != ':' || hex_to_rgb(hex, &plain) < 0)
+            return false;
+        w.kind = COLOR_WORD_PLAIN;
+        w.plain = plain;
+        w.plain_fixed = hex != text;
+        p = hex + 6;
+    }
+
+    if (w.kind != COLOR_WORD_PLAIN && (*p == '>' || *p == '<'))
     {
         w.bound = *p++ == '>' ? 1 : -1;
         if (!parse_amount(&p, 100, &n))
             return false;
         w.tone = n;
     }
-    if (*p == '.')
+    if (w.kind != COLOR_WORD_PLAIN && *p == '.')
     {
         p++;
         if (!parse_amount(&p, 100, &n))
@@ -523,12 +535,31 @@ static bool parse_word(const char *text, int *value)
     {
         int fallback;
 
-        if (hex_to_rgb(p + 1, &fallback) < 0 || p[7] != '\0')
-            return false;
         w.has_fallback = true;
-        w.fallback = fallback;
-        p += 7;
+        if (!strcasecmp(p + 1, "fg") || !strcasecmp(p + 1, "bg"))
+        {
+            w.fallback_from = tolower((unsigned char)p[1]) == 'f'
+                              ? COLOR_FALLBACK_FG : COLOR_FALLBACK_BG;
+            p += 3;
+        }
+        else if (!strncasecmp(p + 1, "fg.", 3))
+        {
+            w.fallback_from = COLOR_FALLBACK_FG;
+            p += 4;
+            if (!parse_amount(&p, 100, &n))
+                return false;
+            w.fallback_mix = n + 1;
+        }
+        else
+        {
+            if (hex_to_rgb(p + 1, &fallback) < 0 || p[7] != '\0')
+                return false;
+            w.fallback = fallback;
+            p += 7;
+        }
     }
+    else if (w.kind == COLOR_WORD_PLAIN)
+        return false;
     if (*p != '\0')
         return false;
 
@@ -554,7 +585,8 @@ bool parse_color(enum screen_type screen, char *text, int *value)
     {
         bool fixed = false;
 
-        if (isalpha((unsigned char)*text) && parse_word(text, value))
+        if ((isalpha((unsigned char)*text) || strchr(text, ':')) &&
+            parse_word(text, value))
             return true;
 
         /* '!' before the digits pins the colour: the album palette carries

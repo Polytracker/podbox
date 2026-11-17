@@ -252,6 +252,8 @@ static int artist_on_menu(void)
     int32_t commitid = carousel_idx.commitid;
     uint32_t generation = carousel_idx.generation;
 
+    int old_blur = global_settings.album_covers_side_blur;
+
     memcpy(old_filter, global_settings.album_covers_filter, sizeof(old_filter));
     strmemccpy(old_chain, global_settings.album_covers_filter_chain,
                sizeof(old_chain));
@@ -287,7 +289,8 @@ static int artist_on_menu(void)
      * have to go */
     if (memcmp(old_filter, global_settings.album_covers_filter,
                sizeof(old_filter))
-        || strcmp(old_chain, global_settings.album_covers_filter_chain))
+        || strcmp(old_chain, global_settings.album_covers_filter_chain)
+        || old_blur != global_settings.album_covers_side_blur)
         carousel_drop_slides();
 
     /* Re-apply the live geometry settings (zoom / margins / tilt). */

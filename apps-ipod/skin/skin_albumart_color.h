@@ -55,6 +55,10 @@ void skin_albumart_filter(int aa_slot, struct skin_albumart *aa);
  * on its own, since buflib reissues ids. Compared, never interpreted. */
 unsigned skin_albumart_gen(void);
 
+/* Whether a blurring %Cl's buffer holds the resume point's cover, rendered at
+ * boot before any art is buffered. Draw it with handle 0 then. */
+bool skin_albumart_seeded(const struct skin_albumart *aa);
+
 /* Playback has loaded a new art bitmap, and `handle` is where it put it. Two
  * things follow: the chain owes that buffer a pass, and any record of having
  * filtered a handle of this id describes a picture that no longer exists,

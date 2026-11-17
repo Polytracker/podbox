@@ -154,6 +154,7 @@ Artist artwork uses these providers:
 2. Last.fm public artist/gallery pages
 3. fanart.tv
 4. TheAudioDB
+5. Deezer, used only when one of its albums matches one of the artist's album folders
 
 The process is:
 
@@ -496,6 +497,7 @@ both
 --ignore-cache
 --retry-not-found
 --no-theaudiodb
+--no-deezer
 ```
 
 ### Rate limits
@@ -506,6 +508,7 @@ both
 --musicbrainz-rate-limit 1.1
 --coverartarchive-rate-limit 1.0
 --theaudiodb-rate-limit 2.5
+--deezer-rate-limit 0.3
 --image-rate-limit 0.2
 ```
 

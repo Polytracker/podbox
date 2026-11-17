@@ -380,10 +380,10 @@ after new music, run it after `database_pb.exe`.
 
 | Setting | What it does | Default | |
 |---|---|---|---|
-| Dynamic Colors | Recolours the interface from the artwork of whatever is playing. A skin not written for it will look wrong, since it cannot know what its colours will become. | No |  |
+| Dynamic Colors | Recolours the interface from the artwork of whatever is playing. A skin not written for it will look wrong, since it cannot know what its colours will become. Off shows two plain colours, the Foreground and Background Colour: in Scrim, plain text on a solid background, with no blurred cover. | Off |  |
 | Dynamic Colors Background | Which of the album's two colours becomes the background. Auto takes the one the artwork has most of; Light and Dark always take the lighter or the darker. Light keeps a light theme light whatever is playing; the text is then the darker colour, which may be harder to read where a skin draws it over the art. | Auto |  |
-| Foreground Colour | The colour of text and lines. Reset by loading a theme. | e7f3ef |  |
-| Background Colour | The colour behind them. Reset by loading a theme. | 000c21 |  |
+| Foreground Colour | The colour of text and lines. Where the album's colours are in use, a theme like Scrim takes those instead, so this shows only with Dynamic Colors off or on screens it leaves alone. Reset by loading a theme. | e7f3ef |  |
+| Background Colour | The colour behind them, shown in the same places as the Foreground Colour. Reset by loading a theme. | 000c21 |  |
 | Line Selector Colours ▸ Primary Colour | The colour at the top of the graduated selector bar. | ffeb9c |  |
 | Line Selector Colours ▸ Secondary Colour | The colour at the bottom of the graduated bar behind the highlighted row. Setting it the same as the start colour gives a flat bar instead of a fade. | b58e00 |  |
 | Line Selector Colours ▸ Text Colour | The colour of the text on the highlighted row, which has to read against the bar rather than against the background. | 000000 |  |
@@ -443,9 +443,16 @@ Also reached as **Appearance** under `Settings > Playback > Now Playing Screen`.
 |---|---|---|---|
 | Show Album Title | Whether the album name is drawn over the covers, and where. | Show Album and Artist at the Bottom |  |
 | Show Year in Album Title | Shows the release year in the caption, before or after the album's name. | No |  |
-| Background | Which colour fills the screen behind the covers: one of the theme's, which follows Dynamic Colours, or Custom, a colour of your own that stays put. Choosing Custom opens a colour picker; Custom Colour below it changes the colour later. The captions turn black or white to read on it. | Background Colour |  |
+| Background | What fills the screen behind the covers: one of the theme's colours, which follow Dynamic Colours; Custom, a colour of your own that stays put; or Blurred Art, the playing album's cover blurred, as Scrim's menus show it. Choosing Custom opens a colour picker; Custom Colour below it changes the colour later. Blurred Art uses the last album played when nothing is playing, and the Background Colour while there is no cover to blur. | Background Colour |  |
 | Custom Colour | The colour behind the screen while Background is Custom. Dynamic Colours leave it alone, and the text over it turns black or white to read on it. | 000000 |  |
 | Status Bar | Draws the status bar over the carousel. Off gives the covers the whole screen. | No |  |
+| Floor Shadow | How dark the shadow on the ground below the covers is, darkest under the middle one. Off removes it. It cannot show on a black background. | 70% |  |
+| Shadow Distance | How far below the covers the floor shadow reaches. It fades out towards its lower edge. | 10 px | **Adv** |
+| Cover Shadow | How dark the shadow each cover casts on the covers behind it is. The middle cover's is the darker and wider; the side covers cast two-thirds as much. Off removes it, which also makes the carousel slightly quicker to draw. | 75% |  |
+| Shadow Fade-In | How long the middle cover's darker shadows take to fade in once it stops. The carousel keeps drawing for that long after each stop; 0 shows them at once. | 1000 ms | **Adv** |
+| Vignette | Darkens the edges and corners of the screen, behind and over the covers, so the middle cover stands out. It stays put as the covers move, and the caption text is not darkened. Off removes it; a cheaper alternative to the shadows. | Off |  |
+| Side Blur | How blurred the covers either side of the middle one are, more towards the edges of the screen; the middle cover stays sharp. Off removes it. Each cover then takes a quarter more memory, so fewer stay loaded. | 3 |  |
+| Smooth Edges | Smooths the stepped top and bottom edges of the angled covers, blending the last 1 to 3 rows at each edge; more is softer. Off leaves them stepped. Costs very little. | 2 px |  |
 | View Mode | 3D angles the covers away on both sides. Flat lays them face-on and the same size, in two piles either side of the current one. | 3D |  |
 | 3D Centre Margin | The gap between the front cover and its neighbours in the 3D view. | 0 | **Adv** |
 | 3D Slide Tuck | How far the side covers stack back behind the front one in the 3D view. | 32 | **Adv** |
@@ -456,6 +463,7 @@ Also reached as **Appearance** under `Settings > Playback > Now Playing Screen`.
 | Artwork Filter ▸ Filter 1 | First of three image adjustments applied to the covers in the carousel. Art rows in the browser are not affected. | Off | **Adv** |
 | Artwork Filter ▸ Filter 2 | Second image adjustment in the chain, applied after the first. | Off | **Adv** |
 | Artwork Filter ▸ Filter 3 | Third and last image adjustment in the chain. | Off | **Adv** |
+| Show Frame Rate | Shows frame timings in place of the caption: frames a second and the time each part of a frame takes. For checking how fast the carousel draws. | No | **Adv** |
 
 Also reached as **Appearance** under `Settings > Library > Carousel`.
 
