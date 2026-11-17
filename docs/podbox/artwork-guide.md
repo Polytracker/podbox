@@ -112,19 +112,60 @@ artist's when the album artist has none. The `ipod-artist-photos` tool writes bo
 ## Liner notes
 
 `Liner Notes`, next to `Artist Bio` in the now-playing menu and in the menu of an album in
-Music, is the same kind of page for the album: its cover as the banner, the title, a line
-of facts and its notes. Opened from the now-playing menu, either page swaps to the other
-with Right: the artist's bio and the playing album's notes. Right does nothing when the
-track has no album. The files are in `Artwork/Notes`, named `<Album Artist> - <Album>`:
+Music, adds three more pages to the bio: the album's notes, notes on the playing track, and
+the album's credits. Left and Right go from page to page, and the pages' names run along
+the top; a page with no file is left out. The files are named `<Album Artist> - <Album>`,
+or for a track `<Album Artist> - <Title>`:
 
 ```text
 Artwork
-└── Notes
-    ├── Radiohead - OK Computer.txt
-    └── Radiohead - OK Computer.jpg
+├── Notes
+│   ├── Radiohead - OK Computer.txt
+│   └── Radiohead - OK Computer.jpg
+├── Tracks
+│   └── Radiohead - Karma Police.txt
+└── Credits
+    └── Radiohead - OK Computer.txt
 ```
 
-The `.txt` is laid out as for a bio. A paragraph starting with `# ` is drawn small and grey,
-for the critics' scores or the source; one followed by an ordinary paragraph is
-that paragraph's heading, drawn in bold. Both pages share their settings, under
-Settings > Appearance > Viewers > Artist Bio & Liner Notes.
+The album's `.txt` is laid out as for a bio, under its cover as the banner. A paragraph
+starting with `# ` is drawn small and grey, for the critics' scores or the source; one
+followed by an ordinary paragraph is that paragraph's heading, drawn in bold.
+
+A track's `.txt` starts `#title` and `#facts`, each followed by a tab and its text, then
+the paragraphs, and ends with `#sources`, a tab and where the text came from:
+
+```text
+#title	Karma Police
+#facts	Track 6 · OK Computer
+
+"Karma Police" is a song by the English rock band Radiohead...
+
+#sources	From the introduction to the Wikipedia article "Karma Police"
+```
+
+A credits `.txt` has `#facts` and `#status` lines under the album's title, then groups
+headed `## `, a person to a line as the name, a tab and their roles. Track numbers in
+square brackets are drawn small and grey after the role they belong to. Lines after
+`#links` are the people's other appearances, which Select on the page lists:
+
+```text
+#facts	Edition: 1997 · CD · UK
+#status	3 people appear elsewhere in your library
+
+## Musicians
+Jonny Greenwood	Guitar, Keyboard [1, 3–5]
+
+## Producers
+Nigel Godrich	Producer
+
+#sources	Credits from Discogs
+#links
+P	Nigel Godrich	Producer
+A	Radiohead	Kid A	Producer
+T	Beck	Sea Change	Lost Cause	Producer
+```
+
+Track and Credits pages are drawn over the album's banner, blurred. All four pages share
+their settings, under Settings > Appearance > Viewers > Liner Notes; each page can be
+switched off there, and the `ipod-liner-notes` tools then stop writing its files.
