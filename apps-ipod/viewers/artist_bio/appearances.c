@@ -50,7 +50,6 @@
 #define AP_ENTRIES   256
 #define AP_SCROLL_WAIT  (HZ * 3 / 2)  /* before a long line moves */
 #define AP_SCROLL_STEP  2             /* pixels a frame */
-#define AP_GREY      LCD_RGBPACK(0xbd, 0xbd, 0xbd)  /* Scrim's other rows */
 
 struct ap_field
 {
@@ -82,7 +81,7 @@ static struct
     int offset;                /* the selected first line's scroll */
     long moved;                /* when the selection last changed */
     int icons;                 /* the theme's icon font, or -1 */
-    unsigned bar, accent;
+    unsigned bar, title, white, grey, accent;
 } ap;
 
 /* ---- reading the lines ------------------------------------------------ */
@@ -337,8 +336,7 @@ static void ap_draw(struct screen *d, struct viewport *vp)
     char one[MAX_PATH * 2], two[MAX_PATH * 2], clock[16] = "";
     bool icons = ap_icons();
     int ix = icons ? 46 : 12, body_h = font_get(c->body_font)->height;
-    unsigned grey = c->backdrop ? AP_GREY : color_blend(c->bg, c->fg, 170);
-    unsigned white = c->backdrop ? LCD_WHITE : c->fg;
+    unsigned grey = ap.grey, white = ap.white;
     struct tm *tm = get_time();
     const char *title;
     char name[MAX_PATH];
@@ -374,9 +372,9 @@ static void ap_draw(struct screen *d, struct viewport *vp)
                      tm->tm_min);
     }
     w = ap_width(clock, c->body_font);
-    ap_text_in(d, vp, 10, 8, 270 - w - 10, c->head_font, LCD_BLACK, 0,
+    ap_text_in(d, vp, 10, 8, 270 - w - 10, c->head_font, ap.title, 0,
                title);
-    ap_text_in(d, vp, 280 - w, 8, w, c->body_font, LCD_BLACK, 0, clock);
+    ap_text_in(d, vp, 280 - w, 8, w, c->body_font, ap.title, 0, clock);
 
     for (i = ap.top; i < ap.count && i < ap.top + AP_ROWS; i++)
     {
@@ -469,15 +467,26 @@ enum appearances_exit appearances_show(const struct appearances_ctx *c,
     struct viewport *vp = c->vp;
     struct viewport *last = d->set_viewport(vp);
     enum appearances_exit ret = APPEARANCES_BACK;
-    unsigned dominant, vivid;
+    unsigned dominant, vivid, fg, bg;
 
     ap.c = c;
     ap_read(c->links);
     if (!ap.npeople)
         return APPEARANCES_BACK;
     ap.icons = font_load(FONT_DIR "/24x24-icons.fnt");
-    /* Scrim's bar: white at 12/15 over the picture */
-    ap.bar = color_blend(ap_average_top(c, vp->width), LCD_WHITE, 205);
+    /* Scrim's colours, through the album's when Dynamic Colors is on: the
+     * bar is the text colour at 12/15 over the picture, its words the
+     * background colour; the selected row is white, the others light grey
+     * over the picture */
+    fg = c->backdrop ? dynamic_colors_resolve(global_settings.fg_color)
+                     : c->fg;
+    bg = c->backdrop ? dynamic_colors_resolve(global_settings.bg_color)
+                     : c->bg;
+    ap.bar = color_blend(ap_average_top(c, vp->width), fg, 205);
+    ap.title = bg;
+    ap.white = c->backdrop ? LCD_WHITE : fg;
+    ap.grey = c->backdrop ? LCD_RGBPACK(0xbd, 0xbd, 0xbd)
+                          : color_blend(bg, fg, 190);
     ap.accent = dynamic_colors_roles(&dominant, &vivid) ? vivid : LCD_WHITE;
     ap_enter(-1, 0);
     ap_draw(d, vp);
