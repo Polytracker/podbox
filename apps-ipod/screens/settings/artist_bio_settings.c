@@ -135,6 +135,8 @@ MENUITEM_SETTING(artist_bio_banner, &global_settings.artist_bio_banner,
                  shown_callback);
 MENUITEM_SETTING(liner_notes_names_scroll,
                  &global_settings.liner_notes_names_scroll, shown_callback);
+MENUITEM_SETTING(liner_notes_names_bar,
+                 &global_settings.liner_notes_names_bar, shown_callback);
 MENUITEM_SETTING(liner_notes_trim, &global_settings.liner_notes_trim,
                  shown_callback);
 MENUITEM_SETTING(liner_notes_icons, &global_settings.liner_notes_icons,
@@ -144,5 +146,5 @@ MAKE_MENU(artist_bio_menu, ID2P(LANG_BIO_NOTES_MENU), NULL, Icon_NOICON,
           &liner_notes_item, &liner_notes_bio, &liner_notes_album,
           &liner_notes_track, &liner_notes_credits, &artist_bio_background,
           &artist_bio_custom_color_item, &artist_bio_banner,
-          &liner_notes_names_scroll,
+          &liner_notes_names_scroll, &liner_notes_names_bar,
           &liner_notes_trim, &liner_notes_icons);

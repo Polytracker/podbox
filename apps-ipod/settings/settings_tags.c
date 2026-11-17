@@ -373,6 +373,7 @@ static const struct tag_row tag_rows[] = {
 { "liner notes trim titles",  TAG_APPEARANCE,                    "liner notes remaster edition" },
 { "liner notes appearance icons", TAG_APPEARANCE,                "liner notes credits" },
 { "liner notes scroll page names", TAG_APPEARANCE,               "liner notes bio album track credits" },
+{ "liner notes page names bar",    TAG_APPEARANCE,               "liner notes bio album track credits" },
 
 /* --- battery and power --------------------------------------------------- */
 { "backlight timeout",   TAG_BATTERY|TAG_APPEARANCE,             "backlight light screen timeout" },

@@ -126,6 +126,7 @@ static struct
     struct viewport tvp;       /* the text's, under the page names */
     unsigned fg, bg, dim, soft;
     unsigned mark, other;      /* the strip's underline, its other names */
+    bool bar_made;             /* ab_bar holds this page's names bar */
     int font[AB_FONTS];        /* font ids drawn with */
     int loaded[AB_FONTS];      /* font_load() handles, -1 for none */
     int text_handle;           /* the text, then the line table */
@@ -659,7 +660,8 @@ static void ab_load_banner(const char *dir, const char *stem,
                             under ? FB_UNPACK_SCALAR_LCD(under[x]) : ab.bg,
                             t));
     }
-    for (y = 0; y < AB_SHADE && y < bm.height; y++)
+    for (y = 0; y < AB_SHADE && y < bm.height
+                && !global_settings.liner_notes_names_bar; y++)
     {
         fb_data *row = px + y * STRIDE(SCREEN_MAIN, bm.width, bm.height);
         int t = (AB_SHADE - y) * 170 / AB_SHADE;
@@ -1051,6 +1053,7 @@ static void ab_open(void)
     ab.banner.data = NULL;
     ab.links = NULL;
     ab.clip = global_settings.liner_notes_names_scroll ? 0 : AB_STRIP;
+    ab.bar_made = false;
     ab.tvp = ab.vp;
     ab.tvp.y += ab.clip;
     ab.tvp.height -= ab.clip;
@@ -1105,6 +1108,77 @@ static void ab_draw_empty(struct screen *d)
 /* The names of the pages shown, across the top, this one's in the text
  * colour and underlined. Over the banner on Bio and Album. The text scrolls
  * under them, or with Scroll Page Names they go up with it. */
+/* The page names' bar: the top AB_STRIP rows of the page as it first
+ * appears, blurred and darkened once, then drawn at `top` as it is. A box
+ * blur, 17 px across and 5 down, on running sums. */
+static fb_data ab_bar[AB_STRIP][LCD_WIDTH];
+
+static void ab_frost(int top)
+{
+    enum { RX = 8, RY = 2 };
+    static unsigned char rgb[AB_STRIP][LCD_WIDTH][3];
+    static unsigned char tmp[LCD_WIDTH + 2 * RX][3];
+    unsigned toward = ab_blurred() || ab.banner.data ? LCD_BLACK : ab.fg;
+    int amount = toward == LCD_BLACK ? 110 : 24;
+    int y0 = MAX(top, 0), y1 = MIN(top + AB_STRIP, LCD_HEIGHT), h = y1 - y0;
+    int x, y, c;
+
+    if (ab.bar_made)
+    {
+        for (y = y0; y < y1; y++)
+            memcpy(FBADDR(0, y), ab_bar[y - top], sizeof ab_bar[0]);
+        return;
+    }
+    if (h < AB_STRIP)
+        return;                 /* made once the whole bar is on screen */
+    for (y = 0; y < h; y++)
+    {
+        fb_data *row = FBADDR(0, y0 + y);
+
+        /* horizontal: edges repeated, then a sliding sum */
+        for (x = 0; x < LCD_WIDTH + 2 * RX; x++)
+        {
+            unsigned px = FB_UNPACK_SCALAR_LCD(
+                row[MIN(MAX(x - RX, 0), LCD_WIDTH - 1)]);
+
+            tmp[x][0] = RGB_UNPACK_RED(px);
+            tmp[x][1] = RGB_UNPACK_GREEN(px);
+            tmp[x][2] = RGB_UNPACK_BLUE(px);
+        }
+        for (c = 0; c < 3; c++)
+        {
+            int sum = 0;
+
+            for (x = 0; x < 2 * RX + 1; x++)
+                sum += tmp[x][c];
+            for (x = 0; x < LCD_WIDTH; x++)
+            {
+                rgb[y][x][c] = sum / (2 * RX + 1);
+                sum += tmp[MIN(x + 2 * RX + 1, LCD_WIDTH + 2 * RX - 1)][c]
+                       - tmp[x][c];
+            }
+        }
+    }
+    /* vertical, within the bar, then darkened and written back */
+    for (x = 0; x < LCD_WIDTH; x++)
+        for (y = 0; y < h; y++)
+        {
+            int r = 0, g = 0, b = 0, n = 0, k;
+
+            for (k = MAX(y - RY, 0); k <= MIN(y + RY, h - 1); k++, n++)
+            {
+                r += rgb[k][x][0];
+                g += rgb[k][x][1];
+                b += rgb[k][x][2];
+            }
+            ab_bar[y][x] = FB_SCALARPACK_LCD(color_blend(
+                LCD_RGBPACK(r / n, g / n, b / n), toward, amount));
+        }
+    ab.bar_made = true;
+    for (y = y0; y < y1; y++)
+        memcpy(FBADDR(0, y), ab_bar[y - top], sizeof ab_bar[0]);
+}
+
 static void ab_draw_strip(struct screen *d)
 {
     static const int names[AB_PAGES] = {
@@ -1129,12 +1203,15 @@ static void ab_draw_strip(struct screen *d)
         y -= ab.pos;
     if (y + AB_STRIP <= 0)
         return;
+    if (global_settings.liner_notes_names_bar)
+        ab_frost(ab.clip ? 0 : -ab.pos);
     ab.vp.font = font;
     for (i = 0; i < AB_PAGES; i++)
     {
         if (!width[i])
             continue;
-        if (ab.banner.data && ab.pos < AB_STRIP)
+        if (ab.banner.data && ab.pos < AB_STRIP
+            && !global_settings.liner_notes_names_bar)
         {
             /* a shadow, so the names read on a light photo */
             d->set_foreground(LCD_BLACK);

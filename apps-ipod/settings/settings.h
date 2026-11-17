@@ -979,6 +979,7 @@ struct user_settings
     bool liner_notes_trim;        /* tag_trim() the titles the pages show */
     bool liner_notes_icons;       /* icons in Other Appearances */
     bool liner_notes_names_scroll; /* page names go up with the text */
+    bool liner_notes_names_bar; /* a frosted bar behind the page names */
     /* Spun (apps-ipod/viewers/playback_viewer). */
     bool spun_artwork;            /* draw sleeves on the cards that have one */
     int  spun_top_count;          /* rows a top-N section shows */

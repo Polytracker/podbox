@@ -1323,6 +1323,11 @@ Lets the row of page names at the top -- Bio, Album, Track, Credits -- go up
 with the text as you scroll. Off keeps it in place, with the text passing
 under it.
 
+[liner notes page names bar]
+A dark frosted band behind the page names, blurred from the picture under it,
+so the names read on any photo. Off leaves the photo as it is, darkened a
+little at the top.
+
 [liner notes appearance icons]
 A disc beside each album and a note beside each track in Other Appearances, as
 Scrim's own rows have. Off gives the titles the full width.

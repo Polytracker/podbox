@@ -28054,3 +28054,17 @@
     *: "Scroll Page Names"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_LINER_NOTES_NAMES_BAR
+  desc: Liner Notes settings: a frosted bar behind the row of page names at the top
+  user: core
+  <source>
+    *: "Page Names Bar"
+  </source>
+  <dest>
+    *: "Page Names Bar"
+  </dest>
+  <voice>
+    *: "Page Names Bar"
+  </voice>
+</phrase>
