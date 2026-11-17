@@ -18,6 +18,7 @@ struct appearances_ctx
     struct viewport *vp;       /* the screen's, full size */
     char *links;               /* the credits file's lines after "#links" */
     const fb_data *backdrop;   /* the page's blurred backdrop, or NULL */
+    int top;                   /* the backdrop's row at the screen's top */
     unsigned fg, bg;           /* the page's colours, for no backdrop */
     int body_font, small_font, head_font;
 };

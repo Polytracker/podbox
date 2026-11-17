@@ -145,6 +145,7 @@ static struct
     char album[MAX_PATH];      /* for Album and Credits */
     char title[MAX_PATH];      /* for Track */
     char stem[MAX_PATH - 24];  /* the file's name, without ".txt" */
+    char stems[AB_PAGES][MAX_PATH - 24];    /* each page's, from ab_scan */
 } ab;
 
 static const char *const ab_dirs[AB_PAGES] = {
@@ -195,6 +196,18 @@ static void ab_scan(void)
     {
         ab.page = i;
         ab.has[i] = ab_page_wanted(i) && ab_find();
+        if (ab.has[i])
+            strlcpy(ab.stems[i], ab.stem, sizeof ab.stems[i]);
+        else
+            ab.stems[i][0] = '\0';
+    }
+    /* the album's banner is Track's and Credits' backdrop, Album on or off */
+    if (!ab.has[AB_ALBUM] && ab.album[0] && ab_blurred()
+        && (ab.has[AB_TRACK] || ab.has[AB_CREDITS]))
+    {
+        ab.page = AB_ALBUM;
+        if (ab_find())
+            strlcpy(ab.stems[AB_ALBUM], ab.stem, sizeof ab.stems[AB_ALBUM]);
     }
     ab.page = keep;
 }
@@ -218,8 +231,8 @@ static const char *ab_second(void)
 /* `name`, without "(2018 Remaster)" and the like when Trim Titles is on */
 static const char *ab_trim(const char *name, char *buf, int size)
 {
-    return global_settings.liner_notes_trim ? tag_trim(name, buf, size)
-                                            : name;
+    return global_settings.liner_notes_trim && size >= MAX_PATH
+           ? tag_trim(name, buf, size) : name;
 }
 
 /* ---- finding the file ------------------------------------------------- */
@@ -443,6 +456,20 @@ static void ab_fonts_unload(void)
 
 /* ---- reading the page ------------------------------------------------- */
 
+int liner_notes_whole(const char *s, int n)
+{
+    int i = n, need;
+    unsigned char c;
+
+    while (i > 0 && n - i < 3 && ((unsigned char)s[i - 1] & 0xc0) == 0x80)
+        i--;
+    if (i == 0)
+        return n;
+    c = s[i - 1];
+    need = c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : c >= 0xc0 ? 2 : 1;
+    return n - (i - 1) < need ? i - 1 : n;
+}
+
 /* Ends the line at *p, strips a trailing \r and moves *p to the next one.
  * NULL at the end of the text. */
 static char *ab_line(char **p)
@@ -454,9 +481,9 @@ static char *ab_line(char **p)
     while (*e && *e != '\n')
         e++;
     *p = *e ? e + 1 : e;
-    *e = '\0';
     if (e > s && e[-1] == '\r')
-        e[-1] = '\0';
+        e--;
+    s[liner_notes_whole(s, e - s)] = '\0';
     return s;
 }
 
@@ -654,7 +681,7 @@ static int ab_width(const char *text, int len, int font)
     char buf[128];
     int w = 0;
 
-    len = MIN(len, (int)sizeof buf - 1);
+    len = liner_notes_whole(text, MIN(len, (int)sizeof buf - 1));
     memcpy(buf, text, len);
     buf[len] = '\0';
     font_getstringsize((const unsigned char *)buf, &w, NULL, font);
@@ -836,10 +863,11 @@ static char *ab_trim_facts(char *facts, char *buf, int size)
     char *sep = strstr(facts, dot);
     char album[MAX_PATH];
 
-    if (!global_settings.liner_notes_trim || !sep)
+    if (!global_settings.liner_notes_trim || !sep || size < MAX_PATH)
         return facts;
     snprintf(buf, size, "%.*s%s%s", (int)(sep - facts), facts, dot,
              ab_trim(sep + sizeof dot - 1, album, sizeof album));
+    buf[liner_notes_whole(buf, strlen(buf))] = '\0';
     return buf;
 }
 
@@ -1011,18 +1039,13 @@ static void ab_open(void)
     ab.tvp = ab.vp;
     ab.tvp.y += ab.clip;
     ab.tvp.height -= ab.clip;
-    if ((ab.page == AB_TRACK || ab.page == AB_CREDITS) && ab_blurred())
-    {
-        /* drawn over the album's banner, blurred */
-        int page = ab.page;
-
-        ab.page = AB_ALBUM;
-        if (ab_find())
-            ab_load_banner(LINER_NOTES_DIR, ab.stem, true);
-        ab.page = page;
-    }
-    if (!ab_find())
+    /* Track and Credits are drawn over the album's banner, blurred */
+    if ((ab.page == AB_TRACK || ab.page == AB_CREDITS) && ab_blurred()
+        && ab.stems[AB_ALBUM][0])
+        ab_load_banner(LINER_NOTES_DIR, ab.stems[AB_ALBUM], true);
+    if (!ab.has[ab.page])
         return;
+    strlcpy(ab.stem, ab.stems[ab.page], sizeof ab.stem);
     if ((ab.page == AB_BIO || ab.page == AB_ALBUM)
         && (global_settings.artist_bio_banner || ab_blurred()))
         ab_load_banner(ab_dir(), ab.stem, false);
@@ -1156,10 +1179,11 @@ static void ab_draw(void)
     {
         const struct ab_line *l = &ab.lines[i];
         int y = l->y - ab.pos;
-        int len = MIN(l->len, (int)sizeof buf - 1);
+        int len = liner_notes_whole(l->text, MIN(l->len, (int)sizeof buf - 1));
 
+        /* a small piece hangs lower than a body one on its line */
         if (y >= ab.vp.height)
-            break;
+            continue;
         if (y + (int)font_get(ab.font[l->font])->height <= ab.clip)
             continue;
         memcpy(buf, l->text, len);
@@ -1264,6 +1288,7 @@ static int ab_appearances(void)
 {
     struct appearances_ctx c = {
         .vp = &ab.vp, .links = ab.links, .backdrop = ab.backdrop,
+        .top = ab.pos % (2 * ab.vp.height),
         .fg = ab.fg, .bg = ab.bg, .body_font = ab.font[AB_FONT_BODY],
         .small_font = ab.font[AB_FONT_SUB], .head_font = ab.font[AB_FONT_HEAD],
     };
@@ -1282,7 +1307,9 @@ static int ab_appearances(void)
             ab.names[1][0] = ab.title[0] = '\0';
             ab_scan();
             ab.page = ab_page_ok(AB_CREDITS) ? AB_CREDITS
-                      : MAX(ab_page_step(-1, 1), AB_CREDITS);
+                      : ab_page_step(AB_CREDITS, -1);
+            if (ab.page < 0)
+                ab.page = AB_CREDITS;           /* "No credits" */
             ab.pos = ab.target = 0;
             ab_open();
             break;
@@ -1333,6 +1360,8 @@ static int ab_menu(void)
     pop_current_activity();
     viewportmanager_theme_undo(SCREEN_MAIN, false);
 
+    if (ret == MENU_ATTACHED_USB)
+        return ret;
     if (!global_settings.liner_notes)
         return AB_MENU_EMPTY;
     ab_scan();
@@ -1342,10 +1371,13 @@ static int ab_menu(void)
 
         if (page < 0)
             page = ab_page_step(ab.page, -1);
-        if (page < 0)
+        if (page >= 0)
+        {
+            ab.page = page;
+            ab.target = 0;
+        }
+        else if (!ab_page_wanted(ab.page))
             return AB_MENU_EMPTY;
-        ab.page = page;
-        ab.target = 0;
     }
     ab_open();
     ab.target = MIN(ab.target, ab_max_pos());

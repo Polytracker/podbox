@@ -45,4 +45,8 @@ int liner_notes_of(const char *artist, const char *album);
  * other three: what the menu rows opening them ask */
 bool liner_notes_page_on(bool bio);
 
+/* `n`, or less so that the first `n` bytes of `s` do not end partway
+ * through a character */
+int liner_notes_whole(const char *s, int n);
+
 #endif /* _ARTIST_BIO_H */

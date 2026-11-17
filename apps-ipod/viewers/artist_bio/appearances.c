@@ -38,6 +38,7 @@
 #include "skin/skin_albumart_color.h"  /* dynamic_colors_roles */
 #include "input/action.h"
 #include "system/shutdown.h"      /* default_event_handler */
+#include "artist_bio.h"           /* liner_notes_whole */
 #include "appearances.h"
 
 #define AP_BAR_H     35            /* Scrim's top bar */
@@ -148,9 +149,17 @@ static void ap_read(char *links)
     {
         int n = ap_split(&p, f, 5);
 
-        if (n >= 2 && f[0].n == 1 && f[0].s[0] == 'P'
-            && ap.npeople < AP_PEOPLE)
+        if (n >= 2 && f[0].n == 1 && f[0].s[0] == 'P')
         {
+            /* a person with no rows stored is not shown: their place is
+             * the next one's */
+            if (who && !who->count)
+                ap.npeople--;
+            if (ap.npeople == AP_PEOPLE)
+            {
+                who = NULL;
+                continue;
+            }
             who = &ap.people[ap.npeople++];
             who->name = f[1];
             who->roles = n > 2 ? f[2] : (struct ap_field){ "", 0 };
@@ -191,13 +200,15 @@ static void ap_read(char *links)
                 who->albums++;
         }
     }
+    if (who && !who->count)
+        ap.npeople--;
 }
 
 /* ---- drawing ---------------------------------------------------------- */
 
 static void ap_copy(char *buf, int size, const struct ap_field *f)
 {
-    int n = MIN(f->n, size - 1);
+    int n = liner_notes_whole(f->s, MIN(f->n, size - 1));
 
     memcpy(buf, f->s, n);
     buf[n] = '\0';
@@ -211,24 +222,24 @@ static int ap_width(const char *s, int font)
     return w;
 }
 
-/* `s` shortened to `width` in `font`, ending in "..." when cut */
-static void ap_cut(char *s, int width, int font)
+/* `s`, in a buffer of `size`, shortened to `width` in `font` and ending
+ * in "..." when cut */
+static void ap_cut(char *s, int size, int width, int font)
 {
-    int n = strlen(s);
+    static const char ell[] = "\xe2\x80\xa6";
+    int n;
 
     if (ap_width(s, font) <= width)
         return;
-    while (n > 0)
-    {
-        do
-            n--;
-        while (n > 0 && (s[n] & 0xc0) == 0x80);
-        while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == ','))
-            n--;
-        strcpy(s + n, "\xe2\x80\xa6");
-        if (ap_width(s, font) <= width)
-            return;
-    }
+    n = font_measurestring((const unsigned char *)s, -1,
+                           MAX(0, width - ap_width(ell, font)), NULL, NULL,
+                           font);
+    n = MIN(n, size - (int)sizeof ell);
+    while (n > 0 && (s[n] & 0xc0) == 0x80)
+        n--;
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == ','))
+        n--;
+    strcpy(s + n, ell);
 }
 
 /* "9 albums, 3 tracks" */
@@ -300,8 +311,10 @@ static void ap_text_in(struct screen *d, struct viewport *vp, int x, int y,
     box.x = vp->x + x;
     box.y = vp->y + y;
     box.width = MIN(w, vp->width - x);
-    box.height = font_get(font)->height;
+    box.height = MIN((int)font_get(font)->height, vp->height - y);
     box.font = font;
+    if (box.width <= 0 || box.height <= 0)
+        return;
     last = d->set_viewport(&box);
     d->set_drawmode(DRMODE_FG);
     d->set_foreground(colour);
@@ -345,9 +358,17 @@ static void ap_draw(struct screen *d, struct viewport *vp)
     d->set_viewport(vp);
     d->set_background(c->bg);
     if (c->backdrop)
-        d->bitmap_part(c->backdrop, 0, 0,
-                       STRIDE(SCREEN_MAIN, vp->width, 2 * vp->height),
-                       0, 0, vp->width, vp->height);
+    {
+        /* where the Credits page left it */
+        int h = vp->height, stride = STRIDE(SCREEN_MAIN, vp->width, 2 * h);
+        int first = MIN(h, 2 * h - c->top);
+
+        d->bitmap_part(c->backdrop, 0, c->top, stride, 0, 0, vp->width,
+                       first);
+        if (first < h)
+            d->bitmap_part(c->backdrop, 0, 0, stride, 0, first, vp->width,
+                           h - first);
+    }
     else
         d->clear_viewport();
 
@@ -399,7 +420,7 @@ static void ap_draw(struct screen *d, struct viewport *vp)
         ap_text_in(d, vp, AP_LIST_X + ix - hang, y + 6,
                    AP_LIST_W - ix + hang, c->body_font, ink,
                    on ? ap.offset : 0, one);
-        ap_cut(two, AP_LIST_W - ix, c->small_font);
+        ap_cut(two, sizeof two, AP_LIST_W - ix, c->small_font);
         ap_text_in(d, vp, AP_LIST_X + ix, y + 6 + body_h + 3,
                    AP_LIST_W - ix, c->small_font, ink, 0, two);
     }
@@ -450,7 +471,8 @@ static unsigned ap_average_top(const struct appearances_ctx *c, int width)
     for (y = 0; y < AP_BAR_H; y += 4)
         for (x = 0; x < width; x += 8, n++)
         {
-            unsigned px = FB_UNPACK_SCALAR_LCD(c->backdrop[y * width + x]);
+            int row = (c->top + y) % (2 * c->vp->height);
+            unsigned px = FB_UNPACK_SCALAR_LCD(c->backdrop[row * width + x]);
 
             r += RGB_UNPACK_RED(px);
             g += RGB_UNPACK_GREEN(px);
@@ -472,7 +494,10 @@ enum appearances_exit appearances_show(const struct appearances_ctx *c,
     ap.c = c;
     ap_read(c->links);
     if (!ap.npeople)
+    {
+        d->set_viewport(last);
         return APPEARANCES_BACK;
+    }
     ap.icons = font_load(FONT_DIR "/24x24-icons.fnt");
     /* Scrim's colours, through the album's when Dynamic Colors is on: the
      * bar is the text colour at 12/15 over the picture, its words the
