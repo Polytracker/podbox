@@ -6,8 +6,8 @@
  *
  * Reads whichever log the core is writing, and decides what each line means.
  *
- * There are two, chosen by settings > playback > logging, and never written
- * at once:
+ * There are two, chosen by settings > playback > logging; Last.fm writes
+ * both, each play to each with one timestamp:
  *
  *   playback.log      one line per finished track, "ts:elapsed:length:path",
  *                     rotated to playback_0001.log, playback_0002.log, ...
@@ -41,6 +41,7 @@
 #define PV_LOG_PATH LIB_PLAYBACK_LOG
 #define PV_LOG_STEM LIB_PLAYBACK_STEM
 #define PV_SCROBBLER_PATH "/.scrobbler.log"
+#define PV_COVER_PATH LIB_REPORT_SOURCE_FILE
 
 /* global_settings.playback_log, as audio/playback.c defines it. Not exported
  * from there, and not worth exporting for one comparison. */
@@ -424,43 +425,102 @@ int pv_log_peek(enum pv_source src, unsigned long offset, void *buf, int len)
     return got;
 }
 
-/* Does this source hold anything but headers? Stops at the first data line,
- * so an established log costs one buffer's worth of reading. */
-static bool has_data(enum pv_source src)
+/* Does this source hold anything but headers, and when was its first entry
+ * and how long its track? Stops at the first data line, so an established
+ * log costs one buffer's worth of reading. */
+static bool first_entry(enum pv_source src, unsigned long *ts,
+                        unsigned long *length_ms)
 {
     char line[PV_LINE_MAX];
+    struct pv_entry e;
     bool found = false;
 
     if (!rd_open(src))
         return false;
 
-    while (rd_line(line, sizeof(line)))
+    while (!found && rd_line(line, sizeof(line)))
     {
-        if (line[0] != '#' && line[0] != '\0')
-        {
-            found = true;
-            break;
-        }
+        if (line[0] == '#' || line[0] == '\0')
+            continue;
+        found = src == PV_SRC_SCROBBLER ? parse_scrobbler_line(line, &e)
+                                        : parse_playback_line(line, &e);
     }
 
+    rd_close();
+    if (found)
+    {
+        *ts = e.ts;
+        *length_ms = e.length_ms;
+    }
+    return found;
+}
+
+/* Is there a play in playback.log logged at 'ts', of a track 'length_s'
+ * seconds long? The length tells a play logged to both files from one at
+ * the same moment of a clock that was reset since. */
+static bool playback_has(unsigned long ts, unsigned long length_s)
+{
+    char line[PV_LINE_MAX];
+    struct pv_entry e;
+    bool found = false;
+
+    if (!rd_open(PV_SRC_PLAYBACK))
+        return false;
+    while (!found && rd_line(line, sizeof(line)))
+        found = line[0] != '#' && parse_playback_line(line, &e)
+                && e.ts == ts && e.length_ms / 1000 == length_s;
     rd_close();
     return found;
 }
 
+/* Does playback.log hold every play the scrobbler log does? It does when it
+ * has the scrobbler log's first entry, 'scrob_ts': Last.fm logs a play to
+ * both with one timestamp, and the scrobbler log is only appended to or
+ * emptied. The answer is saved with the two first entries it was found for,
+ * so the search runs again only when one of them changes. */
+static bool playback_covers(unsigned long play_ts, unsigned long scrob_ts,
+                            unsigned long scrob_length_ms)
+{
+    unsigned long rec[3];
+    int fd;
+
+    if (scrob_ts < play_ts)
+        return false;
+
+    fd = open(PV_COVER_PATH, O_RDONLY);
+    if (fd >= 0)
+    {
+        bool known = read(fd, rec, sizeof(rec)) == (ssize_t)sizeof(rec)
+                     && rec[0] == scrob_ts && rec[1] == play_ts;
+        close(fd);
+        if (known)
+            return rec[2] != 0;
+    }
+
+    rec[0] = scrob_ts;
+    rec[1] = play_ts;
+    rec[2] = playback_has(scrob_ts, scrob_length_ms / 1000);
+    fd = open(PV_COVER_PATH, O_WRONLY|O_CREAT|O_TRUNC, 0666);
+    if (fd >= 0)
+    {
+        write(fd, rec, sizeof(rec));
+        close(fd);
+    }
+    return rec[2] != 0;
+}
+
 enum pv_source pv_log_pick_source(void)
 {
-    enum pv_source preferred, other;
+    unsigned long play_ts, scrob_ts, play_ms, scrob_ms;
+    bool play = first_entry(PV_SRC_PLAYBACK, &play_ts, &play_ms);
+    bool scrob = first_entry(PV_SRC_SCROBBLER, &scrob_ts, &scrob_ms);
 
-    preferred = (global_settings.playback_log == PV_SETTING_LASTFM)
-              ? PV_SRC_SCROBBLER : PV_SRC_PLAYBACK;
-    other = (preferred == PV_SRC_SCROBBLER)
-          ? PV_SRC_PLAYBACK : PV_SRC_SCROBBLER;
-
-    if (has_data(preferred))
-        return preferred;
-    if (has_data(other))
-        return other;
-    return PV_SRC_NONE;
+    if (global_settings.playback_log == PV_SETTING_LASTFM && play && scrob
+        && !playback_covers(play_ts, scrob_ts, scrob_ms))
+        return PV_SRC_SCROBBLER;
+    if (play)
+        return PV_SRC_PLAYBACK;
+    return scrob ? PV_SRC_SCROBBLER : PV_SRC_NONE;
 }
 
 long pv_log_read(enum pv_source src, pv_entry_fn cb, void *ctx)

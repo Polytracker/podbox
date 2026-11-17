@@ -400,9 +400,16 @@ static struct mutex playback_log_mutex SHAREDBSS_ATTR;
 #define SCROBBLER_LISTENED_PCT 50   /* played >= this % of a track => rating 'L' */
 #define SCROBBLER_UNTAGGED     "<UNTAGGED>"
 
-/* The mode the buffered lines were formatted in. The setting can change while
- * they wait, and each line belongs in the file of its own format. */
-static int playback_log_buf_mode;
+/* The files a play is written to, a bit (1 << mode) each. Last.fm writes
+ * playback.log as well, since an uploader empties the scrobbler log and the
+ * Playback Report would lose its history with it. */
+static unsigned int playback_log_files(void)
+{
+    int mode = global_settings.playback_log;
+    if (mode == PLAYBACK_LOG_LASTFM)
+        return 1u << PLAYBACK_LOG_GENERIC | 1u << PLAYBACK_LOG_LASTFM;
+    return mode ? 1u << mode : 0;
+}
 
 /* Open a mode's log for appending. An empty scrobbler log gets the
  * Audioscrobbler header first, however it came to be empty: uploaders that
@@ -424,11 +431,21 @@ static int open_playbacklog(int mode)
     return fd;
 }
 
-/* Format one log line for the current mode. Returns snprintf's return value. */
-static int format_playbacklog(char *buf, size_t sz, struct mp3entry *id3,
-                              unsigned long timestamp)
+/* Spaces for the tabs and line breaks in the 'n' bytes from 'at' of a line
+ * whose first 'end' were written: a tag carrying one would split a scrobbler
+ * line into fields or lines it does not have. */
+static void scrub_tag(char *buf, size_t at, size_t n, size_t end)
 {
-    if (global_settings.playback_log == PLAYBACK_LOG_LASTFM)
+    for (size_t i = at; i < at + n && i < end; i++)
+        if (buf[i] == '\t' || buf[i] == '\n' || buf[i] == '\r')
+            buf[i] = ' ';
+}
+
+/* Format one log line for a mode. Returns snprintf's return value. */
+static int format_playbacklog(char *buf, size_t sz, struct mp3entry *id3,
+                              unsigned long timestamp, int mode)
+{
+    if (mode == PLAYBACK_LOG_LASTFM)
     {
         char rating = (id3->elapsed >= id3->length / 100 * SCROBBLER_LISTENED_PCT)
                       ? 'L' : 'S';
@@ -439,13 +456,26 @@ static int format_playbacklog(char *buf, size_t sz, struct mp3entry *id3,
         int track = id3->tracknum;
         if (track < -1)
             track = -1;
-        return snprintf(buf, sz, "%s\t%s\t%s\t%d\t%ld\t%c\t%lu\t%s\n",
-                        (artist && artist[0]) ? artist : SCROBBLER_UNTAGGED,
-                        id3->album ? id3->album : "",
-                        (id3->title && id3->title[0]) ? id3->title : name,
-                        track, (long)(id3->length / 1000),
-                        rating, timestamp,
-                        id3->mb_track_id ? id3->mb_track_id : "");
+        if (!artist || !artist[0])
+            artist = SCROBBLER_UNTAGGED;
+        const char *album = id3->album ? id3->album : "";
+        const char *title = (id3->title && id3->title[0]) ? id3->title : name;
+        const char *mbid = id3->mb_track_id ? id3->mb_track_id : "";
+        int len = snprintf(buf, sz, "%s\t%s\t%s\t%d\t%ld\t%c\t%lu\t%s\n",
+                           artist, album, title,
+                           track, (long)(id3->length / 1000),
+                           rating, timestamp, mbid);
+        if (len > 0 && sz > 0)
+        {
+            size_t end = (size_t)len < sz ? (size_t)len : sz - 1;
+            size_t a = strlen(artist), b = strlen(album), t = strlen(title);
+            size_t m = strlen(mbid);
+            scrub_tag(buf, 0, a, end);
+            scrub_tag(buf, a + 1, b, end);
+            scrub_tag(buf, a + b + 2, t, end);
+            scrub_tag(buf, (size_t)len - 1 - m, m, end);
+        }
+        return len;
     }
     return snprintf(buf, sz, "%lu:%ld:%ld:%s\n",
                     timestamp, (long)id3->elapsed, (long)id3->length, id3->path);
@@ -1381,7 +1411,6 @@ void allocate_playback_log(void)
         fd = open_playbacklog(PLAYBACK_LOG_LASTFM);
         if (fd >= 0)
             close(fd);
-        return;
     }
 
     while (1)
@@ -1412,10 +1441,77 @@ void allocate_playback_log(void)
     }
 }
 
+/* A play's lines for every file it goes into, each led by its mode's digit,
+ * since the setting can change while they wait in the buffer. Returns the
+ * length, 'sz' or more when they do not fit. */
+static size_t format_buffered(char *buf, size_t sz, struct mp3entry *id3,
+                              unsigned long timestamp)
+{
+    size_t n = 0;
+    for (int mode = PLAYBACK_LOG_GENERIC; mode <= PLAYBACK_LOG_LASTFM; mode++)
+    {
+        if (!(playback_log_files() & 1u << mode))
+            continue;
+        if (n + 1 >= sz)
+            return sz;
+        buf[n] = '0' + mode;
+        int len = format_playbacklog(buf + n + 1, sz - n - 1, id3,
+                                     timestamp, mode);
+        if (len < 0)
+            return sz;
+        n += 1 + len;
+    }
+    return n;
+}
+
+/* Write the buffered lines of one mode to its file, without their digit.
+ * False when the file would not open, leaving them all unwritten. */
+static bool flush_buffered(const char *buf, size_t len, int mode)
+{
+    const char *end = buf + len;
+    int fd = -1;
+    while (buf < end)
+    {
+        const char *nl = memchr(buf, '\n', end - buf);
+        const char *next = nl ? nl + 1 : end;
+        if (*buf == '0' + mode)
+        {
+            if (fd < 0 && (fd = open_playbacklog(mode)) < 0)
+                return false;
+            write(fd, buf + 1, next - buf - 1);
+        }
+        buf = next;
+    }
+    if (fd >= 0)
+        close(fd);
+    return true;
+}
+
+/* Keep only the buffered lines of the modes in 'unwritten', a bit
+ * (1 << mode) each, for the next flush to try again */
+static void keep_buffered(char *buf, size_t len, unsigned int unwritten)
+{
+    const char *from = buf, *end = buf + len;
+    char *to = buf;
+    while (from < end)
+    {
+        const char *nl = memchr(from, '\n', end - from);
+        size_t n = (nl ? nl + 1 : end) - from;
+        unsigned int mode = (unsigned char)*from - '0';
+        if (mode <= PLAYBACK_LOG_LASTFM && unwritten & 1u << mode)
+        {
+            memmove(to, from, n);
+            to += n;
+        }
+        from += n;
+    }
+    *to = '\0';
+}
+
 static void write_playbacklog(struct mp3entry *id3)
 {
     /* Off logs nothing new, but lines already buffered are still plays and
-     * are flushed to the file of their own mode. */
+     * are flushed to the files of their own modes. */
     if (!global_settings.playback_log)
         id3 = NULL;
     unsigned long timestamp = 0;
@@ -1442,18 +1538,15 @@ static void write_playbacklog(struct mp3entry *id3)
     }
     if (id3 && id3->elapsed > PLAYBACK_LOG_MIN_ELAPSED_MS)
     {
-        /* Lines of another mode are flushed first rather than joined. */
-        if (buf && (used == 0 ||
-                    playback_log_buf_mode == global_settings.playback_log))
+        if (buf)
         {
-            ssize_t entrylen = format_playbacklog(buf, bufsz, id3, timestamp);
+            size_t entrylen = format_buffered(buf, bufsz, id3, timestamp);
 
-            if (entrylen < bufsz)
+            if (entrylen < (size_t)bufsz)
             {
-                playback_log_buf_mode = global_settings.playback_log;
                 DEBUGF("BUFFERED: time: %lu elapsed %ld/%ld saving file: %s\n",
                     timestamp, (long)id3->elapsed, (long)id3->length, id3->path);
-                return; /* succeed or snprintf fail return */
+                return;
             }
             buf[0] = '\0';
         }
@@ -1462,36 +1555,43 @@ static void write_playbacklog(struct mp3entry *id3)
     else
         id3 = NULL;
 
-    if (buf && used > 0) /* flush, to the file of the mode it was written in */
+    unsigned int unwritten = 0;
+    if (buf && used > 0) /* flush, each line to the file of its mode */
     {
-        int fd = open_playbacklog(playback_log_buf_mode);
-        if (fd < 0)
-        {
-            return; /* failure */
-        }
         /* write() can yield, and buflib may compact the pool while we are
          * blocked, moving this allocation out from under us. Pinning holds
          * it still for the duration; every _pinned get needs its matching
          * core_put_data_pinned() or the pool can never compact again. */
         buf = core_get_data_pinned(playback_log_handle);
-        write(fd, buf, used);
         DEBUGF("%s Writing %lu bytes of buf:\n%s\n", __func__, used, buf);
-        buf[0] = '\0';
+        if (!flush_buffered(buf, used, PLAYBACK_LOG_GENERIC))
+            unwritten |= 1u << PLAYBACK_LOG_GENERIC;
+        if (!flush_buffered(buf, used, PLAYBACK_LOG_LASTFM))
+            unwritten |= 1u << PLAYBACK_LOG_LASTFM;
+        keep_buffered(buf, used, unwritten);
         core_put_data_pinned(buf);
-        close(fd);
     }
-    if (id3)
+    /* A file whose buffered lines would not flush goes without this play:
+     * it would not open a moment ago, and written now the play would land
+     * ahead of older ones. A file that will not open leaves the other to be
+     * written. */
+    for (int mode = PLAYBACK_LOG_GENERIC; id3 && mode <= PLAYBACK_LOG_LASTFM;
+         mode++)
     {
-        int fd = open_playbacklog(global_settings.playback_log);
+        if (!(playback_log_files() & 1u << mode) || unwritten & 1u << mode)
+            continue;
+        int fd = open_playbacklog(mode);
         if (fd < 0)
-        {
-            return; /* failure */
-        }
+            continue;
         /* we have the timestamp from when we tried to add to buffer */
         char entry[MAX_PATH + 128];
-        int len = format_playbacklog(entry, sizeof(entry), id3, timestamp);
+        int len = format_playbacklog(entry, sizeof(entry), id3, timestamp,
+                                     mode);
         if (len > (int)sizeof(entry) - 1) /* snprintf returns untruncated len */
+        {
             len = sizeof(entry) - 1;
+            entry[len - 1] = '\n';  /* or the next line joins this one */
+        }
         if (len > 0)
             write(fd, entry, len);
         close(fd);

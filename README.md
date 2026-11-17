@@ -299,8 +299,8 @@ Your year in listening, like the summaries streaming services send at the end of
 out on the player from what it has logged. Based on [Spun](https://github.com/majorsiebe/Stats_for_iPod).
 
 - `Playback Report` on the main menu
-  - It reads the log that `Settings > Playback > Logging` writes, on by default: the standard
-    playback log, or the Last.fm scrobbler log if you log that instead
+  - It reads the log that `Settings > Playback > Logging` writes, on by default. With
+    `On + Last.fm`, the scrobble log is read only while it holds plays the iPod's own log lacks
   - It counts your whole history, from the first entry of the log.
 - The report is a row of cards in sections. The wheel scrolls along a section, and `Left`/`Right`
   move between sections
@@ -410,9 +410,9 @@ catch, and a combo for every brick broken without touching the paddle.
 - Play: `Arcade`, then the game
   - Hold `Select` on a game for its high scores, its help, or to delete a saved game
 - Press `Menu` to quit. A game you quit is marked `Paused` and starts again where you left it
-- Hold `Menu` to pause: the game's own options, its high scores and help, and the music's
-  controls
-  - Turn `Game Sound` off there to hear only your music
+- Hold `Menu` to pause: the game's settings, its high scores and help, and the music's
+  controls. `Menu` there goes back to the game
+  - Turn `Game Sound` off in `Settings` to hear only your music
 - See every game's best scores and achievements in `Arcade > High Scores`
 - Remove the Arcade from the main menu with `Settings > Appearance > Menus > Edit Main Menu`
 
@@ -934,6 +934,9 @@ licences of all the code it takes in are kept in full in the built file.
 - [Lucide](https://lucide.dev), the icons
   - Copyright Lucide Contributors, and Cole Bemis for the Feather icons it began from
   - Licensed under the ISC License
+- [vanilla-colorful](https://github.com/web-padawan/vanilla-colorful), the colour picker
+  - Copyright 2020 Serhii Kulykov
+  - Licensed under the MIT License
 - [sfxr](https://www.drpetter.se/project_sfxr.html), the sound generators
   - Copyright 2007 Tomas Pettersson
   - Licensed under the MIT License
