@@ -136,6 +136,10 @@ enum {
     GO_TO_LISTEN_STATS,
     /* The Arcade: the game carts on the player (games/arcade/shelf.c) */
     GO_TO_ARCADE,
+    /* Liner Notes' Other Appearances, as it was left to open an album in
+     * Music: where going back out of that album lands (liner_notes_return()).
+     * No root-menu entry, and nothing to return to once it has been used. */
+    GO_TO_LINER_NOTES,
 };
 extern struct menu_item_ex root_menu_;
 

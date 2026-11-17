@@ -45,6 +45,13 @@ int liner_notes_of(const char *artist, const char *album);
  * other three: what the menu rows opening them ask */
 bool liner_notes_page_on(bool bio);
 
+/* Going back out of an album that Other Appearances opened in Music: whether
+ * one is waiting, forgetting it, and reopening the list where it was left.
+ * liner_notes_return() returns a GO_TO_* code, GO_TO_ROOT with none waiting. */
+bool liner_notes_return_armed(void);
+void liner_notes_return_cancel(void);
+int liner_notes_return(void);
+
 /* `n`, or less so that the first `n` bytes of `s` do not end partway
  * through a character */
 int liner_notes_whole(const char *s, int n);

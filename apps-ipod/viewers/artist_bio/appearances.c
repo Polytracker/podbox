@@ -481,7 +481,7 @@ static unsigned ap_average_top(const struct appearances_ctx *c, int width)
     return LCD_RGBPACK(r / n, g / n, b / n);
 }
 
-enum appearances_exit appearances_show(const struct appearances_ctx *c,
+enum appearances_exit appearances_show(struct appearances_ctx *c,
                                        char *artist_out, char *album_out,
                                        int size)
 {
@@ -531,7 +531,10 @@ enum appearances_exit appearances_show(const struct appearances_ctx *c,
         ap.accent = c->fg;
         ap.grey = color_blend(c->bg, c->fg, 190);
     }
-    ap_enter(-1, 0);
+    if (c->person >= 0 && c->person < ap.npeople)
+        ap_enter(c->person, c->row);
+    else
+        ap_enter(-1, 0);
     ap_draw(d, vp);
 
     while (1)
@@ -613,6 +616,8 @@ enum appearances_exit appearances_show(const struct appearances_ctx *c,
     }
 
   done:
+    c->person = ap.person;
+    c->row = ap.sel;
     if (ap.icons >= 0)
         font_unload(ap.icons);
     d->set_viewport(last);

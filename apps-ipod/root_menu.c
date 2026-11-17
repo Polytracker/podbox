@@ -65,6 +65,7 @@
 #include "speech/language.h"
 #include "files/filetypes.h"
 #include "viewers/text_viewer/text_viewer.h"
+#include "viewers/artist_bio/artist_bio.h"
 #include "viewers/playback_viewer/pv_row.h"
 #include "disk.h"
 #include "sound.h"
@@ -614,6 +615,15 @@ static int browser(void* param)
              * (Album covers is the only caller of this entry point), so
              * returning GO_TO_PREVIOUS resolves back to exactly that. Menu
              * is not redirected: it goes to the main menu, as in any list. */
+            /* An album opened from Liner Notes' Other Appearances: going back
+             * out of it returns to that list. Leaving any other way ends it. */
+            if (liner_notes_return_armed())
+            {
+                if (ret_val == GO_TO_ROOT && !browser_left_by_menu())
+                    ret_val = GO_TO_LINER_NOTES;
+                else
+                    liner_notes_return_cancel();
+            }
             if (ret_val == GO_TO_ROOT && !browser_left_by_menu())
                 ret_val = GO_TO_PREVIOUS;
 
@@ -622,11 +632,27 @@ static int browser(void* param)
              * playing a track, which goes to the WPS. Album covers' resume
              * signal describes the track list, and outranks the playing track
              * on the next open whenever that comes, so it goes with it. */
-            if (ret_val != GO_TO_PREVIOUS)
+            if (ret_val != GO_TO_PREVIOUS && ret_val != GO_TO_LINER_NOTES)
                 album_covers_cancel_resume();
         break;
     }
     return ret_val;
+}
+
+/* Back to Liner Notes' Other Appearances from the album it opened. The
+ * viewer was opened over Now Playing or a list that is gone by now, so
+ * leaving it goes to Now Playing while something plays, else the root; and
+ * opening another album goes the way the first one did. */
+static int liner_notes_return_scrn(void *param)
+{
+    int ret = liner_notes_return();
+
+    (void)param;
+    if (ret == GO_TO_DBBROWSER)
+        return GO_TO_ALBUM_COVERS_TRACKS;
+    if (ret == GO_TO_PREVIOUS)
+        return audio_status() ? GO_TO_WPS : GO_TO_ROOT;
+    return ret;
 }
 
 /* The generic Plugins browser (apps/menus/plugin_menu.c's old Games/Apps/
@@ -996,6 +1022,7 @@ static const struct root_items items[] = {
     [GO_TO_IMAGES] = { images_scrn, NULL, NULL },
     [GO_TO_BOOKS] = { books_scrn, NULL, &text_viewer_menu },
     [GO_TO_ARCADE] = { arcade_scrn, NULL, NULL },
+    [GO_TO_LINER_NOTES] = { liner_notes_return_scrn, NULL, NULL },
     [GO_TO_PODCASTS] = { browser, (void*)GO_TO_PODCASTS, &tagcache_menu },
     [GO_TO_SPUN] = { playback_viewer_scrn, NULL, NULL },
     [GO_TO_MUSIC_QUIZ] = { plugins_browser_removed, NULL, NULL },

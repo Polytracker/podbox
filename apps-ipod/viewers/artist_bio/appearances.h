@@ -21,6 +21,9 @@ struct appearances_ctx
     int top;                   /* the backdrop's row at the screen's top */
     unsigned fg, bg;           /* the page's colours, for no backdrop */
     int body_font, small_font, head_font;
+    /* In, where to open: a person's index and their row, or -1 for the
+     * people list. Out, where the lists were left. */
+    int person, row;
 };
 
 /* How the lists were left */
@@ -34,7 +37,7 @@ enum appearances_exit
 
 /* Shows the people list, then a person's own. For _ALBUM and _CREDITS the
  * album's artist and title are written to the two buffers. */
-enum appearances_exit appearances_show(const struct appearances_ctx *c,
+enum appearances_exit appearances_show(struct appearances_ctx *c,
                                        char *artist_out, char *album_out,
                                        int size);
 

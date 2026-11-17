@@ -127,6 +127,8 @@ static struct
     unsigned fg, bg, dim, soft;
     unsigned mark, other;      /* the strip's underline, its other names */
     bool bar_made;             /* ab_bar holds this page's names bar */
+    int ap_person, ap_row;     /* where Other Appearances opens */
+    bool ap_open;              /* open it as soon as the Credits page shows */
     int font[AB_FONTS];        /* font ids drawn with */
     int loaded[AB_FONTS];      /* font_load() handles, -1 for none */
     int text_handle;           /* the text, then the line table */
@@ -1390,6 +1392,15 @@ static bool ab_arm_album(const char *artist, const char *album)
 
 /* Select on Credits: Other Appearances. Returns a GO_TO_* code to leave
  * with, or 0 to stay. */
+/* Where Other Appearances was left to open an album in Music, for going back
+ * out of that album: liner_notes_return() */
+static struct
+{
+    bool armed;
+    char names[2][MAX_PATH], album[MAX_PATH], title[MAX_PATH];
+    int person, row;
+} ab_back;
+
 static int ab_appearances(void)
 {
     struct appearances_ctx c = {
@@ -1397,6 +1408,7 @@ static int ab_appearances(void)
         .top = ab.pos % (2 * ab.vp.height),
         .fg = ab.fg, .bg = ab.bg, .body_font = ab.font[AB_FONT_BODY],
         .small_font = ab.font[AB_FONT_SUB], .head_font = ab.font[AB_FONT_HEAD],
+        .person = ab.ap_person, .row = ab.ap_row,
     };
     char artist[MAX_PATH], album[MAX_PATH];
 
@@ -1404,9 +1416,18 @@ static int ab_appearances(void)
     {
         case APPEARANCES_ALBUM:
             if (ab_arm_album(artist, album))
+            {
+                ab_back.armed = true;
+                memcpy(ab_back.names, ab.names, sizeof ab_back.names);
+                strlcpy(ab_back.album, ab.album, sizeof ab_back.album);
+                strlcpy(ab_back.title, ab.title, sizeof ab_back.title);
+                ab_back.person = c.person;
+                ab_back.row = c.row;
                 return GO_TO_DBBROWSER;
+            }
             break;
         case APPEARANCES_CREDITS:
+            ab.ap_person = -1;          /* another album's people */
             ab_close();
             strlcpy(ab.names[0], artist, sizeof ab.names[0]);
             strlcpy(ab.album, album, sizeof ab.album);
@@ -1502,6 +1523,9 @@ static int ab_run(void)
     ab.loaded[0] = ab.loaded[1] = ab.loaded[2] = ab.loaded[3] = -1;
     ab.pos = ab.target = 0;
 
+    if (!ab.ap_open)
+        ab.ap_person = -1;
+
     push_current_activity(ACTIVITY_ARTISTBIO);
     viewportmanager_theme_enable(SCREEN_MAIN, false, &ab.vp);
     ab_open();
@@ -1509,6 +1533,21 @@ static int ab_run(void)
 
     while (1)
     {
+        if (ab.ap_open)
+        {
+            ab.ap_open = false;
+            if (ab.page == AB_CREDITS && ab.links && *ab.links)
+            {
+                int go = ab_appearances();
+
+                if (go)
+                {
+                    ret = go;
+                    goto done;
+                }
+            }
+        }
+
         int action, timeout = HZ;
 
         if (ab.pos != ab.target)
@@ -1651,4 +1690,32 @@ int liner_notes_of(const char *artist, const char *album)
     ab.names[1][0] = ab.title[0] = '\0';
     strlcpy(ab.album, album ? album : "", sizeof ab.album);
     return ab_start(AB_ALBUM);
+}
+
+bool liner_notes_return_armed(void)
+{
+    return ab_back.armed;
+}
+
+void liner_notes_return_cancel(void)
+{
+    ab_back.armed = false;
+}
+
+int liner_notes_return(void)
+{
+    int ret;
+
+    if (!ab_back.armed)
+        return GO_TO_ROOT;
+    ab_back.armed = false;
+    memcpy(ab.names, ab_back.names, sizeof ab.names);
+    strlcpy(ab.album, ab_back.album, sizeof ab.album);
+    strlcpy(ab.title, ab_back.title, sizeof ab.title);
+    ab.ap_person = ab_back.person;
+    ab.ap_row = ab_back.row;
+    ab.ap_open = true;
+    ret = ab_start(AB_CREDITS);
+    ab.ap_open = false;
+    return ret;
 }
