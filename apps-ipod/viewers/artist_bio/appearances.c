@@ -476,8 +476,7 @@ enum appearances_exit appearances_show(const struct appearances_ctx *c,
     ap.icons = font_load(FONT_DIR "/24x24-icons.fnt");
     /* Scrim's colours, through the album's when Dynamic Colors is on: the
      * bar is the text colour at 12/15 over the picture, its words the
-     * background colour; the selected row is white, the others light grey
-     * over the picture */
+     * background colour; the selected row is white */
     fg = c->backdrop ? dynamic_colors_resolve(global_settings.fg_color)
                      : c->fg;
     bg = c->backdrop ? dynamic_colors_resolve(global_settings.bg_color)
@@ -485,9 +484,19 @@ enum appearances_exit appearances_show(const struct appearances_ctx *c,
     ap.bar = color_blend(ap_average_top(c, vp->width), fg, 205);
     ap.title = bg;
     ap.white = c->backdrop ? LCD_WHITE : fg;
-    ap.grey = c->backdrop ? LCD_RGBPACK(0xbd, 0xbd, 0xbd)
-                          : color_blend(bg, fg, 190);
-    ap.accent = dynamic_colors_roles(&dominant, &vivid) ? vivid : LCD_WHITE;
+    /* as Scrim writes them: the bar vivid>60:ffffff, the other rows
+     * vivid>85:bdbdbd -- the album's vivid colour lifted to tone 60 or 85 */
+    if (dynamic_colors_roles(&dominant, &vivid))
+    {
+        ap.accent = color_tone_bound(vivid, 60, 1);
+        ap.grey = color_tone_bound(vivid, 85, 1);
+    }
+    else
+    {
+        ap.accent = LCD_WHITE;
+        ap.grey = c->backdrop ? LCD_RGBPACK(0xbd, 0xbd, 0xbd)
+                              : color_blend(bg, fg, 190);
+    }
     ap_enter(-1, 0);
     ap_draw(d, vp);
 
