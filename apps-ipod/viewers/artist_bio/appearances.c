@@ -499,28 +499,37 @@ enum appearances_exit appearances_show(const struct appearances_ctx *c,
         return APPEARANCES_BACK;
     }
     ap.icons = font_load(FONT_DIR "/24x24-icons.fnt");
-    /* Scrim's colours, through the album's when Dynamic Colors is on: the
-     * bar is the text colour at 12/15 over the picture, its words the
-     * background colour; the selected row is white */
-    fg = c->backdrop ? dynamic_colors_resolve(global_settings.fg_color)
-                     : c->fg;
-    bg = c->backdrop ? dynamic_colors_resolve(global_settings.bg_color)
-                     : c->bg;
-    ap.bar = color_blend(ap_average_top(c, vp->width), fg, 205);
-    ap.title = bg;
-    ap.white = c->backdrop ? LCD_WHITE : fg;
-    /* as Scrim writes them: the bar vivid>60:ffffff, the other rows
-     * vivid>85:bdbdbd -- the album's vivid colour lifted to tone 60 or 85 */
-    if (dynamic_colors_roles(&dominant, &vivid))
+    if (c->backdrop)
     {
-        ap.accent = color_tone_bound(vivid, 60, 1);
-        ap.grey = color_tone_bound(vivid, 85, 1);
+        /* Scrim's colours, through the album's when Dynamic Colors is on: the
+         * bar is the text colour at 12/15 over the picture, its words the
+         * background colour. The selected row is white, its mark the album's
+         * vivid colour at tone 60 and the other rows at tone 85, as Scrim
+         * writes vivid>60:ffffff and vivid>85:bdbdbd. */
+        fg = dynamic_colors_resolve(global_settings.fg_color);
+        bg = dynamic_colors_resolve(global_settings.bg_color);
+        ap.bar = color_blend(ap_average_top(c, vp->width), fg, 205);
+        ap.title = bg;
+        ap.white = LCD_WHITE;
+        ap.accent = LCD_WHITE;
+        ap.grey = LCD_RGBPACK(0xbd, 0xbd, 0xbd);
+        if (dynamic_colors_roles(&dominant, &vivid))
+        {
+            ap.accent = color_tone_bound(vivid, 60, 1);
+            ap.grey = color_tone_bound(vivid, 85, 1);
+        }
     }
     else
     {
-        ap.accent = LCD_WHITE;
-        ap.grey = c->backdrop ? LCD_RGBPACK(0xbd, 0xbd, 0xbd)
-                              : color_blend(bg, fg, 190);
+        /* the page's own colours: the bar its text colour with the title
+         * in the background colour, the selected row's mark the text
+         * colour. Many themes draw their selection in the skin, where this
+         * cannot see it. */
+        ap.bar = c->fg;
+        ap.title = c->bg;
+        ap.white = c->fg;
+        ap.accent = c->fg;
+        ap.grey = color_blend(c->bg, c->fg, 190);
     }
     ap_enter(-1, 0);
     ap_draw(d, vp);

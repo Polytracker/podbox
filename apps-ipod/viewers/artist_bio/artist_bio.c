@@ -125,6 +125,7 @@ static struct
     struct viewport vp;
     struct viewport tvp;       /* the text's, under the page names */
     unsigned fg, bg, dim, soft;
+    unsigned mark, other;      /* the strip's underline, its other names */
     int font[AB_FONTS];        /* font ids drawn with */
     int loaded[AB_FONTS];      /* font_load() handles, -1 for none */
     int text_handle;           /* the text, then the line table */
@@ -406,6 +407,18 @@ static void ab_colours(void)
         ab.bg = LCD_BLACK;
         ab.dim = LCD_RGBPACK(200, 200, 200);
         ab.soft = LCD_RGBPACK(225, 225, 225);
+        ab.mark = ab.fg;
+        ab.other = ab.dim;
+        /* Scrim's selected row: the bar vivid>60, other rows vivid>85 */
+        {
+            unsigned dominant, vivid;
+
+            if (dynamic_colors_roles(&dominant, &vivid))
+            {
+                ab.mark = color_tone_bound(vivid, 60, 1);
+                ab.other = color_tone_bound(vivid, 85, 1);
+            }
+        }
         ab.vp.fg_pattern = ab.fg;
         ab.vp.bg_pattern = ab.bg;
         return;
@@ -425,6 +438,8 @@ static void ab_colours(void)
     }
     ab.dim = color_blend(ab.bg, ab.fg, 170);
     ab.soft = color_blend(ab.bg, ab.fg, 220);
+    ab.mark = ab.fg;
+    ab.other = ab.dim;
     ab.vp.fg_pattern = ab.fg;
     ab.vp.bg_pattern = ab.bg;
 }
@@ -1127,10 +1142,13 @@ static void ab_draw_strip(struct screen *d)
             if (i == ab.page)
                 d->fillrect(x + 1, y + h + 1, width[i], 2);
         }
-        d->set_foreground(i == ab.page ? ab.fg : ab.dim);
+        d->set_foreground(i == ab.page ? ab.fg : ab.other);
         d->putsxy(x, y, (const unsigned char *)str(names[i]));
         if (i == ab.page)
+        {
+            d->set_foreground(ab.mark);
             d->fillrect(x, y + h, width[i], 2);
+        }
         x += width[i] + AB_STRIP_GAP;
     }
 }
