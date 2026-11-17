@@ -2033,7 +2033,6 @@ static bool palette_here(void)
         case ACTIVITY_WPS:
         case ACTIVITY_ALBUMCOVERS:
         case ACTIVITY_LYRICS:
-        case ACTIVITY_ARTISTBIO:
             return true;
         default:
             return false;
