@@ -1,9 +1,9 @@
 /***************************************************************************
  * GNU General Public License (version 2+)
  *
- * Settings menu for the artist bio screen (apps-ipod/viewers/artist_bio).
+ * Settings menu for the Liner Notes pages (apps-ipod/viewers/artist_bio).
  * The same menu is reached from Settings and, in the screen, by holding
- * Menu.
+ * Menu. A row shows only while what it governs is on.
  ****************************************************************************/
 
 #include <stdbool.h>
@@ -73,13 +73,73 @@ static int custom_colour_callback(int action,
     return action;
 }
 
+/* Shown while the main switch is on and, for the rows after the pages,
+ * while a page they apply to is on */
+static int shown_callback(int action, const struct menu_item_ex *this_item,
+                          struct gui_synclist *this_list)
+{
+    const struct user_settings *gs = &global_settings;
+    const void *v;
+    bool show = gs->liner_notes;
+
+    (void)this_list;
+    if (action != ACTION_REQUEST_MENUITEM)
+        return action;
+    v = this_item->variable;
+    if (v == &gs->artist_bio_banner)
+        show = show && (gs->liner_notes_bio || gs->liner_notes_album);
+    else if (v == &gs->liner_notes_trim)
+        show = show && (gs->liner_notes_track || gs->liner_notes_credits);
+    else if (v == &gs->liner_notes_icons)
+        show = show && gs->liner_notes_credits;
+    else if (v == &gs->artist_bio_background)
+        show = show && (gs->liner_notes_bio || gs->liner_notes_album
+                        || gs->liner_notes_track || gs->liner_notes_credits);
+    return show ? action : ACTION_EXIT_MENUITEM;
+}
+
+static int background_shown_callback(int action,
+                                     const struct menu_item_ex *this_item,
+                                     struct gui_synclist *this_list)
+{
+    if (action == ACTION_REQUEST_MENUITEM)
+        return shown_callback(action, this_item, this_list);
+    return background_callback(action, this_item, this_list);
+}
+
+static int custom_colour_shown_callback(int action,
+                                        const struct menu_item_ex *this_item,
+                                        struct gui_synclist *this_list)
+{
+    if (action == ACTION_REQUEST_MENUITEM && !global_settings.liner_notes)
+        return ACTION_EXIT_MENUITEM;
+    return custom_colour_callback(action, this_item, this_list);
+}
+
+MENUITEM_SETTING(liner_notes_item, &global_settings.liner_notes, NULL);
+MENUITEM_SETTING(liner_notes_bio, &global_settings.liner_notes_bio,
+                 shown_callback);
+MENUITEM_SETTING(liner_notes_album, &global_settings.liner_notes_album,
+                 shown_callback);
+MENUITEM_SETTING(liner_notes_track, &global_settings.liner_notes_track,
+                 shown_callback);
+MENUITEM_SETTING(liner_notes_credits, &global_settings.liner_notes_credits,
+                 shown_callback);
 MENUITEM_SETTING(artist_bio_background,
-                 &global_settings.artist_bio_background, background_callback);
+                 &global_settings.artist_bio_background,
+                 background_shown_callback);
 MENUITEM_FUNCTION(artist_bio_custom_color_item, MENU_FUNC_CHECK_RETVAL,
                   ID2P(LANG_CAROUSEL_CUSTOM_COLOR), pick_custom_colour,
-                  custom_colour_callback, Icon_NOICON);
-MENUITEM_SETTING(artist_bio_banner, &global_settings.artist_bio_banner, NULL);
+                  custom_colour_shown_callback, Icon_NOICON);
+MENUITEM_SETTING(artist_bio_banner, &global_settings.artist_bio_banner,
+                 shown_callback);
+MENUITEM_SETTING(liner_notes_trim, &global_settings.liner_notes_trim,
+                 shown_callback);
+MENUITEM_SETTING(liner_notes_icons, &global_settings.liner_notes_icons,
+                 shown_callback);
 
 MAKE_MENU(artist_bio_menu, ID2P(LANG_BIO_NOTES_MENU), NULL, Icon_NOICON,
-          &artist_bio_background, &artist_bio_custom_color_item,
-          &artist_bio_banner);
+          &liner_notes_item, &liner_notes_bio, &liner_notes_album,
+          &liner_notes_track, &liner_notes_credits, &artist_bio_background,
+          &artist_bio_custom_color_item, &artist_bio_banner,
+          &liner_notes_trim, &liner_notes_icons);

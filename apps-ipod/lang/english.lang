@@ -27832,16 +27832,16 @@
 </phrase>
 <phrase>
   id: LANG_BIO_NOTES_MENU
-  desc: Settings > Appearance > Viewers: the shared Artist Bio and Liner Notes settings
+  desc: Settings > Appearance > Viewers: the Liner Notes pages' settings
   user: core
   <source>
-    *: "Artist Bio & Liner Notes"
+    *: "Liner Notes"
   </source>
   <dest>
-    *: "Artist Bio & Liner Notes"
+    *: "Liner Notes"
   </dest>
   <voice>
-    *: "Artist Bio & Liner Notes"
+    *: "Liner Notes"
   </voice>
 </phrase>
 <phrase>
@@ -27856,5 +27856,187 @@
   </dest>
   <voice>
     *: "Blurred Art, Darker"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_BG_PLAIN
+  desc: Liner Notes background: the theme's own text and background colours, no picture
+  user: core
+  <source>
+    *: "Plain"
+  </source>
+  <dest>
+    *: "Plain"
+  </dest>
+  <voice>
+    *: "Plain"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_ALBUM_NOTES
+  desc: Liner Notes settings: whether the album notes page is shown
+  user: core
+  <source>
+    *: "Album Notes"
+  </source>
+  <dest>
+    *: "Album Notes"
+  </dest>
+  <voice>
+    *: "Album Notes"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_TRACK_NOTES
+  desc: Liner Notes settings: whether the track notes page is shown
+  user: core
+  <source>
+    *: "Track Notes"
+  </source>
+  <dest>
+    *: "Track Notes"
+  </dest>
+  <voice>
+    *: "Track Notes"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_ICONS
+  desc: Liner Notes settings: album and track icons in Other Appearances
+  user: core
+  <source>
+    *: "Appearance Icons"
+  </source>
+  <dest>
+    *: "Appearance Icons"
+  </dest>
+  <voice>
+    *: "Appearance Icons"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_BIO
+  desc: Liner Notes: the bio page's name in the row of page names at the top
+  user: core
+  <source>
+    *: "Bio"
+  </source>
+  <dest>
+    *: "Bio"
+  </dest>
+  <voice>
+    *: "Bio"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_OTHER_APPEARANCES
+  desc: Liner Notes: title of the list of people on an album who appear elsewhere
+  user: core
+  <source>
+    *: "Other Appearances"
+  </source>
+  <dest>
+    *: "Other Appearances"
+  </dest>
+  <voice>
+    *: "Other Appearances"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_TRACK_NOTES_NONE
+  desc: Liner Notes: the track page, when no notes file matches the track
+  user: core
+  <source>
+    *: "No notes for this track"
+  </source>
+  <dest>
+    *: "No notes for this track"
+  </dest>
+  <voice>
+    *: "No notes for this track"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CREDITS_NONE
+  desc: Liner Notes: the credits page, when no credits file matches the album
+  user: core
+  <source>
+    *: "No credits for this album"
+  </source>
+  <dest>
+    *: "No credits for this album"
+  </dest>
+  <voice>
+    *: "No credits for this album"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_ALBUMS
+  desc: Liner Notes: how many albums a person appears on elsewhere, as in 3 albums
+  user: core
+  <source>
+    *: "albums"
+  </source>
+  <dest>
+    *: "albums"
+  </dest>
+  <voice>
+    *: "albums"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_ALBUM
+  desc: Liner Notes: one album a person appears on elsewhere, as in 1 album
+  user: core
+  <source>
+    *: "album"
+  </source>
+  <dest>
+    *: "album"
+  </dest>
+  <voice>
+    *: "album"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_TRACKS
+  desc: Liner Notes: how many tracks a person appears on elsewhere, as in 3 tracks
+  user: core
+  <source>
+    *: "tracks"
+  </source>
+  <dest>
+    *: "tracks"
+  </dest>
+  <voice>
+    *: "tracks"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_TRACK_ONE
+  desc: Liner Notes: one track a person appears on elsewhere, as in 1 track
+  user: core
+  <source>
+    *: "track"
+  </source>
+  <dest>
+    *: "track"
+  </dest>
+  <voice>
+    *: "track"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_LINER_NOTES_ON_ALBUM
+  desc: Liner Notes: before the album a track a person appears on comes from, as in Mixing, on Everything Is
+  user: core
+  <source>
+    *: "on"
+  </source>
+  <dest>
+    *: "on"
+  </dest>
+  <voice>
+    *: "on"
   </voice>
 </phrase>

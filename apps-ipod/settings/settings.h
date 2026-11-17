@@ -971,6 +971,13 @@ struct user_settings
     int  artist_bio_background;   /* ARTIST_BIO_BG_* */
     int  artist_bio_custom_color; /* ...when that is ARTIST_BIO_BG_CUSTOM */
     bool artist_bio_banner;       /* draw the banner photo */
+    bool liner_notes;             /* the four pages at all */
+    bool liner_notes_bio;         /* each page, while liner_notes is on */
+    bool liner_notes_album;
+    bool liner_notes_track;
+    bool liner_notes_credits;
+    bool liner_notes_trim;        /* tag_trim() the titles the pages show */
+    bool liner_notes_icons;       /* icons in Other Appearances */
     /* Spun (apps-ipod/viewers/playback_viewer). */
     bool spun_artwork;            /* draw sleeves on the cards that have one */
     int  spun_top_count;          /* rows a top-N section shows */

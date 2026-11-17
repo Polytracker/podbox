@@ -365,6 +365,13 @@ static const struct tag_row tag_rows[] = {
 { "lyric font",               TAG_APPEARANCE,                    "lyrics typeface" },
 { "artist bio background",    TAG_APPEARANCE,                    "artist bio colors" },
 { "artist bio banner",        TAG_APPEARANCE,                    "artist bio photo" },
+{ "liner notes",              TAG_APPEARANCE,                    "artist bio album notes credits" },
+{ "liner notes artist bio",   TAG_APPEARANCE,                    "liner notes page" },
+{ "liner notes album notes",  TAG_APPEARANCE,                    "liner notes page" },
+{ "liner notes track notes",  TAG_APPEARANCE,                    "liner notes page song" },
+{ "liner notes credits",      TAG_APPEARANCE,                    "liner notes page musicians" },
+{ "liner notes trim titles",  TAG_APPEARANCE,                    "liner notes remaster edition" },
+{ "liner notes appearance icons", TAG_APPEARANCE,                "liner notes credits" },
 
 /* --- battery and power --------------------------------------------------- */
 { "backlight timeout",   TAG_BATTERY|TAG_APPEARANCE,             "backlight light screen timeout" },

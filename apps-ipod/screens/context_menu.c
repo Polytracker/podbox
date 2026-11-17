@@ -259,8 +259,30 @@ static int artist_bio_run(void)
     return 0;
 }
 
+/* The two Liner Notes rows, each while a page it opens is switched on */
+static int bio_shown_callback(int action, const struct menu_item_ex *this_item,
+                              struct gui_synclist *this_list)
+{
+    (void)this_item;
+    (void)this_list;
+    if (action == ACTION_REQUEST_MENUITEM && !liner_notes_page_on(true))
+        return ACTION_EXIT_MENUITEM;
+    return action;
+}
+
+static int notes_shown_callback(int action,
+                                const struct menu_item_ex *this_item,
+                                struct gui_synclist *this_list)
+{
+    (void)this_item;
+    (void)this_list;
+    if (action == ACTION_REQUEST_MENUITEM && !liner_notes_page_on(false))
+        return ACTION_EXIT_MENUITEM;
+    return action;
+}
+
 MENUITEM_FUNCTION(artist_bio_item, 0, ID2P(LANG_ARTIST_BIO),
-                  artist_bio_run, NULL, Icon_NOICON);
+                  artist_bio_run, bio_shown_callback, Icon_NOICON);
 
 /* The same screen for an artist or album chosen in a Music list rather than
  * playing: the album's artist, for an album */
@@ -279,13 +301,11 @@ static int artist_bio_row_callback(int action,
                                    const struct menu_item_ex *this_item,
                                    struct gui_synclist *this_list)
 {
-    (void)this_item;
-    (void)this_list;
     if (action == ACTION_REQUEST_MENUITEM
         && (selected_file.context != CONTEXT_ID3DB
             || browser_db_current_scope() == BROWSER_DB_SCOPE_NONE))
         return ACTION_EXIT_MENUITEM;
-    return action;
+    return bio_shown_callback(action, this_item, this_list);
 }
 
 MENUITEM_FUNCTION(artist_bio_row_item, 0, ID2P(LANG_ARTIST_BIO),
@@ -307,7 +327,7 @@ static int liner_notes_run(void)
 }
 
 MENUITEM_FUNCTION(liner_notes_item, 0, ID2P(LANG_LINER_NOTES),
-                  liner_notes_run, NULL, Icon_NOICON);
+                  liner_notes_run, notes_shown_callback, Icon_NOICON);
 
 static int liner_notes_row_run(void)
 {
@@ -325,13 +345,11 @@ static int liner_notes_row_callback(int action,
                                     const struct menu_item_ex *this_item,
                                     struct gui_synclist *this_list)
 {
-    (void)this_item;
-    (void)this_list;
     if (action == ACTION_REQUEST_MENUITEM
         && (selected_file.context != CONTEXT_ID3DB
             || browser_db_current_scope() != BROWSER_DB_SCOPE_ALBUM))
         return ACTION_EXIT_MENUITEM;
-    return action;
+    return notes_shown_callback(action, this_item, this_list);
 }
 
 MENUITEM_FUNCTION(liner_notes_row_item, 0, ID2P(LANG_LINER_NOTES),

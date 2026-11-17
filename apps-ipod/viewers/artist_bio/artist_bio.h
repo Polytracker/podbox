@@ -9,6 +9,8 @@
 #ifndef _ARTIST_BIO_H
 #define _ARTIST_BIO_H
 
+#include <stdbool.h>
+
 /* global_settings.artist_bio_background */
 #define ARTIST_BIO_BG_THEME  0   /* the theme's colours, album art and all */
 #define ARTIST_BIO_BG_CUSTOM 1   /* artist_bio_custom_color, text to suit */
@@ -21,9 +23,15 @@
 /* Where the liner notes are: "<album artist> - <album>.txt", and .jpg */
 #define LINER_NOTES_DIR "/Artwork/Notes"
 
-/* Show the bio of the playing track's artist, returning a GO_TO_* code when
- * the user leaves. Opens whatever is playing, and says so when there is no
- * bio to show. */
+/* Where the track notes are: "<album artist> - <title>.txt" */
+#define TRACK_NOTES_DIR "/Artwork/Tracks"
+
+/* Where the credits are: "<album artist> - <album>.txt" */
+#define CREDITS_DIR "/Artwork/Credits"
+
+/* The Liner Notes pages for the playing track, opened at its artist's bio,
+ * returning a GO_TO_* code when the user leaves. A page with no file says
+ * so. */
 int artist_bio(void);
 
 /* The same for the artist called `name`, whatever is playing */
@@ -32,5 +40,9 @@ int artist_bio_of(const char *name);
 /* The playing album's liner notes, and the same for any album */
 int liner_notes(void);
 int liner_notes_of(const char *artist, const char *album);
+
+/* Whether the Liner Notes are on, with the bio page (`bio`) or any of the
+ * other three: what the menu rows opening them ask */
+bool liner_notes_page_on(bool bio);
 
 #endif /* _ARTIST_BIO_H */
