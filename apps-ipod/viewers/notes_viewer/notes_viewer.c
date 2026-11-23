@@ -1199,6 +1199,15 @@ static bool nv_find_links(void)
             }
             into[(*len)++] = t[i];
         }
+        /* "[¶ (gap)]": an icon's room in a row without it, its width kept
+         * and nothing drawn */
+        if (!an && n > 6 && !memcmp(name + n - 6, " (gap)", 6))
+        {
+            t[off + 2] = TL_GAP_OPEN;
+            t[close + 2] = TL_GAP_CLOSE;
+            off = close + 2;
+            continue;
+        }
         found = nv.nlinks < NV_LINKS_MAX
                 && (an ? notes_link_at(addr, an, nv.doc.artist, nv.doc.album,
                                        &k->t)

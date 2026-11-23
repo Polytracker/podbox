@@ -70,10 +70,16 @@ struct tl_line
 #define TL_ADDRESS    0x92              /* TS_ADDRESS's, inside a hidden part */
 #define TL_SMALL_OPEN  0x93             /* TS_SMALL_OPEN's: never drawn */
 #define TL_SMALL_CLOSE 0x94
+/* Text between these takes its width but is not drawn. No back end makes
+ * them: a screen writes them over a name's two marks, as the notes screen
+ * does to keep a list's words in line past an icon some rows have */
+#define TL_GAP_OPEN    0x95
+#define TL_GAP_CLOSE   0x96
 
 /* What text is set in, as a line or a run of it carries it */
 #define TL_STYLE_BOLD  1
 #define TL_STYLE_SMALL 2
+#define TL_STYLE_GAP   4                /* measured, not drawn */
 #define tl_line_style(ln) (((ln)->bold ? TL_STYLE_BOLD : 0) \
                            | ((ln)->small ? TL_STYLE_SMALL : 0))
 

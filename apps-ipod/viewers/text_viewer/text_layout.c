@@ -70,6 +70,10 @@ static int tl_style_after(const struct text_layout *tl, const unsigned char *s,
             return st | TL_STYLE_SMALL;
         if (s[2] == TL_SMALL_CLOSE)
             return st & ~TL_STYLE_SMALL;
+        if (s[2] == TL_GAP_OPEN)
+            return st | TL_STYLE_GAP;
+        if (s[2] == TL_GAP_CLOSE)
+            return st & ~TL_STYLE_GAP;
     }
     return st;
 }
@@ -127,7 +131,8 @@ static bool tl_is_minor_mark(const unsigned char *s, size_t n)
 {
     return n >= 3 && s[0] == 0xee && s[1] == 0x80
            && (s[2] == TL_MINOR || s[2] == TL_SMALL_OPEN
-               || s[2] == TL_SMALL_CLOSE);
+               || s[2] == TL_SMALL_CLOSE || s[2] == TL_GAP_OPEN
+               || s[2] == TL_GAP_CLOSE);
 }
 
 size_t tl_hidden(const unsigned char *s, size_t n)
@@ -396,8 +401,9 @@ static int tl_put_word(const struct text_layout *tl, unsigned char *s,
             s[i] = '\0';
             screens[SCREEN_MAIN].setfont(font);
             screens[SCREEN_MAIN].set_foreground(*fg);
-            screens[SCREEN_MAIN].putsxy(x, base - font_get(font)->ascent,
-                                        s + start);
+            if (!(*st & TL_STYLE_GAP))
+                screens[SCREEN_MAIN].putsxy(x, base - font_get(font)->ascent,
+                                            s + start);
             s[i] = save;
             x += tl_width_in(font, s + start, i - start);
             if (h == 3 && tl_is_style_mark(s + i, n - i)

@@ -1333,6 +1333,8 @@ static int ns_tracks(const struct ns_piece *pc, const struct notes_doc *d,
                      idx);
             ns_puts(o, ns_buf);
         }
+        else if (ns_get(pc, "notes", &len))     /* its room, kept blank */
+            ns_puts(o, "[" NS_NOTES_ICON " (gap)] ");
         ns_puts(o, label);
         if (ns_show(pc, "length", false)
             && tagcache_entry_numeric(idx, tag_length, &secs) && secs > 0)
