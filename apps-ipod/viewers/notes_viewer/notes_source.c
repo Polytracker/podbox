@@ -54,6 +54,7 @@
 #include "database/tagcache.h"
 #include "database/db_featured.h"   /* guest=true */
 #include "database/db_names.h"
+#include "database/path_key.h"       /* path_key_strip */
 #include "metadata/art_name.h"
 #include "metadata/tag_trim.h"
 #include "metadata/name_index.h"
@@ -2086,14 +2087,57 @@ static void ns_part_of(struct notes_doc *d, const char *name)
     d->part = true;
 }
 
+/* The album's other pages its files' names give, beside `pages`' `n`:
+ * in /Notes/Albums, named for the album's own page and a part --
+ * "Artist - Album - Credits" -- and no library album's own. They are found
+ * so with no names index, or past the pages it holds. */
+static int ns_parts_by_name(const struct notes_doc *d, int *pages, int n,
+                            int max)
+{
+    static char stem[MAX_PATH];
+    const struct notes_page *own = notes_page_get(d->page);
+    const char *path, *dot, *dash = NULL, *s;
+    size_t len;
+    int i, j, count = notes_page_count();
+
+    if (!own || own->dir)
+        return n;
+    path = path_key_strip(notes_page_path(own));
+    if (!(dot = strrchr(path, '.')))
+        return n;
+    len = dot - path;
+    if (d->part)                    /* the album's page: less " - Part" */
+        for (s = path; (s = strstr(s, " - ")) && s < dot; s++)
+            dash = s;
+    if (d->part && !dash)
+        return n;
+    if (dash)
+        len = dash - path;
+    snprintf(stem, sizeof(stem), "%.*s - ", (int)len, path);
+    len += 3;
+    for (i = 0; i < count && n < max; i++)
+    {
+        const struct notes_page *pg = notes_page_get(i);
+
+        if (!pg || pg->kind != NOTES_PAGE_ALBUM || pg->dir || i == d->page
+            || strncasecmp(path_key_strip(notes_page_path(pg)), stem, len))
+            continue;
+        for (j = 0; j < n && pages[j] != i; j++)
+            ;
+        if (j == n && notes_page_album(i) < 0)
+            pages[n++] = i;
+    }
+    return n;
+}
+
 int notes_album_parts(const struct notes_doc *d, const struct name_index *ix,
                       int *pages, int max)
 {
     int i, n = 0;
 
-    if (!ix || d->kind != NOTES_PAGE_ALBUM || d->album < 0)
+    if (d->kind != NOTES_PAGE_ALBUM || d->album < 0)
         return 0;
-    for (i = 0; i < ix->nfiles && n < max; i++)
+    for (i = 0; ix && i < ix->nfiles && n < max; i++)
     {
         const struct name_file *f = &ix->files[i];
         const struct notes_page *pg = notes_page_get(f->page);
@@ -2106,7 +2150,7 @@ int notes_album_parts(const struct notes_doc *d, const struct name_index *ix,
         if (notes_album_named(s, strlen(s), d->artist) == d->album)
             pages[n++] = f->page;
     }
-    return n;
+    return ns_parts_by_name(d, pages, n, max);
 }
 
 bool notes_library_waiting(void)

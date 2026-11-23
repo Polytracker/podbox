@@ -19,6 +19,12 @@
  * completes, so the pages answer throughout it; for the moment of the swap
  * notes_page_get() returns NULL, which every caller checks.
  *
+ * The index takes the memory its pages need and no more: one block, the
+ * pages then their paths, allocated when it is read at boot and again only
+ * when a walk finds more than it holds. The pages are sorted by key, so a
+ * page named by its key or its place (notes_page_at()) is found by halving.
+ * Without a page there is no block.
+ *
  * Parts, in order:
  *   - the index: built by the walk, saved, read at boot, asked
  *   - the lookups for a track and an album
@@ -26,6 +32,7 @@
  ****************************************************************************/
 
 #include <stdbool.h>
+#include <stdlib.h>                 /* qsort */
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -42,6 +49,7 @@
 #include "metadata/art_name.h"
 #include "metadata/name_index.h"   /* name_index_pages_changed */
 #include "system/debug_log.h"
+#include "core_alloc.h"
 #include "notes_files.h"
 #include "notes_links.h"            /* notes_is_artist */
 
@@ -49,17 +57,19 @@
 
 #define NW_FILE      LIB_CACHE_DIR "/notes.dat"
 #define NW_STAGE     LIB_CACHE_DIR "/notes.new"  /* a walk's pages so far */
-#define NW_MAGIC     0x4e4f5433     /* "NOT3" */
-#define NW_PAGES_MAX 2048
-#define NW_POOL      (64 * 1024)    /* their paths */
+#define NW_MAGIC     0x4e4f5434     /* "NOT4": sorted by key */
+#define NW_PAGES_MAX 65535          /* a page's number fits the names index */
+#define NW_POOL_MAX  (8 * 1024 * 1024)
 
 static struct
 {
     bool loaded;                /* the index answers; else there are none */
     unsigned int generation;    /* counts each index loaded or replaced */
     int npages, pool_used;
-    struct notes_page pages[NW_PAGES_MAX];
-    char pool[NW_POOL];
+    int handle;                 /* the block, 0 for none */
+    size_t room;                /* its bytes */
+    struct notes_page *pages;   /* sorted by key */
+    char *pool;                 /* their paths */
 } nw;
 
 struct nw_header
@@ -110,7 +120,8 @@ static unsigned int nw_work_key(const char *artist, size_t alen,
 }
 
 /* Whether the index read from the file holds together: every path inside
- * the pool, which ends in a NUL, and every kind one there is */
+ * the pool, which ends in a NUL, every kind one there is, and the keys in
+ * order */
 static bool nw_valid(int npages, int pool_used)
 {
     int i;
@@ -120,8 +131,38 @@ static bool nw_valid(int npages, int pool_used)
     for (i = 0; i < npages; i++)
         if (nw.pages[i].path >= (uint32_t)pool_used
             || nw.pages[i].kind < NOTES_PAGE_PERSON
-            || nw.pages[i].kind > NOTES_PAGE_OTHER)
+            || nw.pages[i].kind > NOTES_PAGE_OTHER
+            || (i && nw.pages[i].key < nw.pages[i - 1].key))
             return false;
+    return true;
+}
+
+/* A block for `npages` pages and `pool` bytes of their paths, the one held
+ * when it is big enough, nw.pages and nw.pool laid out in it; false when
+ * there is no room, the block held left as it was. It never moves: its
+ * pages are handed out by pointer. */
+static bool nw_room(int npages, int pool)
+{
+    size_t need = ALIGN_UP(npages * sizeof(struct notes_page) + pool, 4);
+    int h;
+
+    if (need > nw.room || !nw.handle)
+    {
+        if (!need)
+            return true;
+        h = core_alloc_ex(need, &buflib_ops_locked);
+        if (h <= 0)
+        {
+            debug_log(DEBUG_LOG_TASKS, "notes: no room for %d pages", npages);
+            return false;
+        }
+        if (nw.handle)
+            core_free(nw.handle);
+        nw.handle = h;
+        nw.room = need;
+    }
+    nw.pages = core_get_data(nw.handle);
+    nw.pool = (char *)(nw.pages + npages);
     return true;
 }
 
@@ -137,7 +178,8 @@ bool notes_where_load(void)
         return false;
     ok = read(fd, &h, sizeof(h)) == (ssize_t)sizeof(h) && h.magic == NW_MAGIC
          && h.npages >= 0 && h.npages <= NW_PAGES_MAX
-         && h.pool_used >= 0 && h.pool_used <= NW_POOL
+         && h.pool_used >= 0 && h.pool_used <= NW_POOL_MAX
+         && nw_room(h.npages, h.pool_used)
          && read(fd, nw.pages, h.npages * sizeof(nw.pages[0]))
             == (ssize_t)(h.npages * sizeof(nw.pages[0]))
          && read(fd, nw.pool, h.pool_used) == h.pool_used
@@ -172,7 +214,7 @@ static void nw_add(int kind, uint32_t key, uint32_t alt, uint32_t part,
     size_t size = strlen(path) + 1;
 
     if (!key || nw_stage < 0 || nw_staged == NW_PAGES_MAX
-        || nw_staged_pool + size > NW_POOL)
+        || nw_staged_pool + size > NW_POOL_MAX)
         return;
     memset(&pg, 0, sizeof(pg));
     pg.key = key;
@@ -196,12 +238,19 @@ static void nw_add(int kind, uint32_t key, uint32_t alt, uint32_t part,
     nw_staged_pool += size;
 }
 
-/* The staging file into the index in memory; false when it cannot be read
- * whole */
+static int nw_by_key(const void *a, const void *b)
+{
+    const struct notes_page *x = a, *y = b;
+
+    return x->key < y->key ? -1 : x->key > y->key;
+}
+
+/* The staging file into the index in memory, sorted; false when it cannot
+ * be read whole, or there is no room for it */
 static bool nw_unstage(void)
 {
     int fd = open(NW_STAGE, O_RDONLY), i;
-    bool ok = fd >= 0;
+    bool ok = fd >= 0 && nw_room(nw_staged, nw_staged_pool);
 
     nw.npages = nw.pool_used = 0;
     for (i = 0; ok && i < nw_staged; i++)
@@ -211,7 +260,7 @@ static bool nw_unstage(void)
 
         ok = read(fd, pg, sizeof(*pg)) == (ssize_t)sizeof(*pg)
              && (size = pg->path) > 0
-             && size <= (uint32_t)(NW_POOL - nw.pool_used)
+             && size <= (uint32_t)(nw_staged_pool - nw.pool_used)
              && read(fd, nw.pool + nw.pool_used, size) == (ssize_t)size;
         if (!ok)
             break;
@@ -222,6 +271,8 @@ static bool nw_unstage(void)
     }
     if (fd >= 0)
         close(fd);
+    if (ok)
+        qsort(nw.pages, nw.npages, sizeof(nw.pages[0]), nw_by_key);
     return ok;
 }
 
@@ -403,6 +454,22 @@ const char *notes_page_path(const struct notes_page *pg)
     return nw.pool + pg->path;
 }
 
+int notes_page_first(uint32_t key)
+{
+    int lo = 0, hi = notes_page_count();
+
+    while (lo < hi)
+    {
+        int mid = (lo + hi) / 2;
+
+        if (nw.pages[mid].key < key)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
 int notes_page_at(const char *rel, size_t len)
 {
     static char want[MAX_PATH];
@@ -423,12 +490,12 @@ int notes_page_at(const char *rel, size_t len)
     if (!*leaf)
         return -1;
     nw_keys(want, leaf, want + len - leaf, &k);
-    for (i = 0; i < n; i++)
+    for (i = notes_page_first(k.key); i < n && nw.pages[i].key == k.key; i++)
     {
         const struct notes_page *pg = &nw.pages[i];
         const char *p;
 
-        if (pg->key != k.key || pg->kind != k.kind || pg->dir
+        if (pg->kind != k.kind || pg->dir
             || (best >= 0 && !notes_page_better(pg, &nw.pages[best])))
             continue;
         /* The key settles it but for a clash: the path says */

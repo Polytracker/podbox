@@ -58,7 +58,8 @@
 #include "name_index.h"
 
 #define NI_VERSION      4
-#define NI_FILES_MAX    2048        /* the page index's NW_PAGES_MAX */
+#define NI_FILES_MAX    2048        /* pages read; an album's other pages past
+                                     * them are found by their names */
 #define NI_MENTIONS_MAX 4096
 #define NI_STRINGS_MAX  4096
 #define NI_NAMES_MAX    2048

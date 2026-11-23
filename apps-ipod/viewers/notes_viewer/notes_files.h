@@ -43,6 +43,9 @@ struct notes_page
 int notes_page_count(void);
 const struct notes_page *notes_page_get(int i);
 const char *notes_page_path(const struct notes_page *pg);
+/* The first page whose key is `key` or after it, the pages being sorted by
+ * key: notes_page_count() when there is none */
+int notes_page_first(uint32_t key);
 /* The page at `len` bytes of `rel`, its location under /Notes with or
  * without its extension (`People/Steve Gadd`), as a labelled link names it;
  * -1 for none. Capitals do not matter, as on the player's disk. */
