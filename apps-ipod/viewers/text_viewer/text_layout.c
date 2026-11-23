@@ -366,7 +366,7 @@ void tl_line_break(const struct text_layout *tl, unsigned char *s,
         struct font *f = font_get(fonts[k]);
 
         ln->ascent = MAX(ln->ascent, f->ascent);
-        below = MAX(below, f->height - f->ascent);
+        below = MAX(below, (int)f->height - f->ascent);
     }
     ln->height = ln->ascent + below;
 }
