@@ -13,10 +13,14 @@
  * libfile beside the banners, of this cache format's version, so a format
  * change makes them all again.
  *
+ * A JPEG of exactly the banner's size, as the notes wiki's scraper writes, is
+ * drawn as it is when its page opens (art_banner_draw()): the sweep passes
+ * it by, and it takes no place among the BANNER_MAX.
+ *
  * Parts, in order:
  *   - the stamps
  *   - making one banner: cropped to fill 320 x 132, centred across and a
- *     third of the way down
+ *     third of the way down; or drawing one of exactly that size
  *   - the sweep
  *   - lookups by person and by album
  *   - the moved banners, user/banners.dat
@@ -138,6 +142,30 @@ static int banner_read(const char *path, struct bitmap *bm, int fmt, int w,
     rc = image_load(&src, bm, (int)size, fmt, NULL);
     close(src.fd);
     return rc;
+}
+
+bool art_banner_exact(const char *path)
+{
+    static char buf[64];
+    struct bitmap bm;
+    const char *dot = strrchr(path, '.');
+
+    return dot && (!strcasecmp(dot, ".jpg") || !strcasecmp(dot, ".jpeg"))
+           && banner_read(path, &bm, FORMAT_NATIVE | FORMAT_RETURN_SIZE,
+                          ART_BANNER_W, ART_BANNER_H, buf, sizeof(buf)) > 0
+           && bm.width == ART_BANNER_W && bm.height == ART_BANNER_H;
+}
+
+bool art_banner_draw(const char *path, void *px, void *buf, size_t size)
+{
+    struct bitmap bm;
+
+    if (banner_read(path, &bm, FORMAT_NATIVE | FORMAT_DITHER, ART_BANNER_W,
+                    ART_BANNER_H, buf, size) <= 0
+        || bm.width != ART_BANNER_W || bm.height != ART_BANNER_H)
+        return false;
+    memcpy(px, bm.data, (size_t)ART_BANNER_W * ART_BANNER_H * FB_DATA_SZ);
+    return true;
 }
 
 /* The banner of the image at `path`, written to `out`. The image is scaled
@@ -271,10 +299,12 @@ static bool banner_sweep_dir(const char *dir, int kind, int n_old, int *n_new,
                   ? art_name_alt_hash_n(e->d_name, dot - e->d_name) : 0;
         if (!rec.key || banner_find(banner_new, *n_new, rec.key, kind) >= 0)
             continue;                       /* no name, or a second image */
+        snprintf(banner_path, sizeof(banner_path), "%s/%s", dir, e->d_name);
+        if (art_banner_exact(banner_path))
+            continue;                       /* drawn as it is */
         if (*n_new == BANNER_MAX)
             break;                  /* full: the rest have no banner */
 
-        snprintf(banner_path, sizeof(banner_path), "%s/%s", dir, e->d_name);
         rec.stamp = banner_stamp(banner_path, &info);
         o = banner_find(banner_old, n_old, rec.key, kind);
         if (o >= 0)

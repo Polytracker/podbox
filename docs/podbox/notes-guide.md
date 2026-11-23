@@ -158,7 +158,7 @@ And each its own:
 | Piece | Properties |
 |---|---|
 | `{{albums}}` | `artist=Name`; `genre=Jazz`; `year=1970-1979`; `guest=true` adds the albums they only feature on (once Featured Artists has read your library); `sort=year` (the order it starts in), `name`, `plays` (most played first), `played` (last played first) or `added` (newest first); `group=decade` or `genre` for a heading over each; `show=year,tracks,length,plays` |
-| `{{tracks}}` | `album=Name`, with `artist=Name` for whose album it is; or `artist=Name` alone for all their tracks, or `composer=Name` for every track whose composer tag names them (names in the tag parted by `,` `;` `/` `&` or `and`); `number=1,2,4` for only those tracks; `disc=2`; `group=disc` for a heading over each disc; `sort=plays`, `played` or `title`; `numbers=false`, or `numbers=true` for a list on one line or in bullets, which have none; `show=length,plays,artist` |
+| `{{tracks}}` | `album=Name`, with `artist=Name` for whose album it is; or `artist=Name` alone for all their tracks, or `composer=Name` for every track whose composer tag names them (names in the tag parted by `,` `;` `/` `&` or `and`); `number=1,2,4` for only those tracks; `notes=2,5` for a ¶ before those tracks that opens their section on the album's other pages, where Select on the track itself plays it; `disc=2`; `group=disc` for a heading over each disc; `sort=plays`, `played` or `title`; `numbers=false`, or `numbers=true` for a list on one line or in bullets, which have none; `show=length,plays,artist` |
 | `{{mentions}}` | `name=Name`; `filter=artists`, `albums`, `people` or `other`, for the kind of page that does the naming; `headings=true` to show the section of the page each is named in; `group=kind` for a heading over albums, people and other pages |
 | `{{pages}}` | `folder=People`, `Albums` or the name of any other folder of `/Notes` |
 
@@ -225,7 +225,9 @@ added at the end when it has no list of its own.
 
 While music plays, hold `Select` on the Now Playing screen and choose
 `Liner Notes`: the playing album's page, opened at the playing track's
-section of the notes, or at its row in the track list. To open it with one press, choose `Liner
+section of the notes; else at that section on another of the album's pages
+(see below), its Tracks, say; else at its row in the track list. A link
+to a track opens the same way. To open it with one press, choose `Liner
 Notes` for one of the Now Playing buttons: `Settings > Playback Settings >
 Now Playing Screen`, then `Select Action`, `Select + Play Action` or `Long
 Press Play Action`.
@@ -252,7 +254,7 @@ becomes current, so you can hear where the links are.
 | Wheel | Scrolls. Two links on one line take a click each before the text moves on; at the end of a page, and on a page too short to scroll, the clicks move the current link on instead |
 | `Select`, `>>\|` | Opens the current link. A track of the page's own album plays the album from that track |
 | `Select` held | The current link's menu |
-| `\|<<` | Back to the page before, where you left it. On the first page, leaves the screen |
+| `\|<<` | Back to the page before, where you left it. On the first page, leaves the screen. Leaving and coming back keeps the way back: the page you left is the page before |
 | `Play` | On an album's page, plays the album when it isn't the one playing; elsewhere, pauses and plays |
 | `Menu` | Leaves the screen |
 | `Menu` held | The page's menu |
@@ -292,6 +294,12 @@ are `Auto` until you set them, made from the text and link colours.
 `Progress Line` off leaves out the line along the foot of the page that
 shows how far the playing track has got.
 
+`Background` sets what lies behind the text. `Plain` is the page's colour,
+as above. `Blurred` is the page's own cover or picture, blurred, with white
+text over it and links in the picture's colour; it moves with the page, and
+a page with no picture keeps the last page's. `Blurred Darker` takes a
+light picture further down. Under either, `Colours` has no effect.
+
 ## The picture at the top
 
 `Settings > Library > Music > Liner Notes and Biographies > Banners` off
@@ -303,8 +311,10 @@ the banner, which is 320 by 132. A wide picture suits it best. Without one,
 an artist's page uses the artist's picture from the player's artwork, and an
 album's its cover. Other pages have no picture: their name is set at the top.
 
-A new picture is made ready in the background, so it shows the second time
-you open the page, or after you next connect to a computer.
+A JPEG of exactly 320 by 132 is shown as it is, the first time the page
+opens. A picture of any other size is made ready in the background, so it
+shows the second time you open the page, or after you next connect to a
+computer; the player keeps up to 256 of those.
 
 The part of the artist's picture or the cover that shows can be moved: hold
 `Menu`, choose `Move Banner`, turn the wheel, and press `Select` to keep it

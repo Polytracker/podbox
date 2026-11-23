@@ -28250,3 +28250,59 @@
     *: "Progress Line"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_NOTES_BACKGROUND
+  desc: liner notes setting: what lies behind a page's text
+  user: core
+  <source>
+    *: "Background"
+  </source>
+  <dest>
+    *: "Background"
+  </dest>
+  <voice>
+    *: "Background"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_BACKGROUND_PLAIN
+  desc: liner notes Background choice: the page's own colour
+  user: core
+  <source>
+    *: "Plain"
+  </source>
+  <dest>
+    *: "Plain"
+  </dest>
+  <voice>
+    *: "Plain"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_BACKGROUND_BLURRED
+  desc: liner notes Background choice: the page's picture, blurred, under white text
+  user: core
+  <source>
+    *: "Blurred"
+  </source>
+  <dest>
+    *: "Blurred"
+  </dest>
+  <voice>
+    *: "Blurred"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_BACKGROUND_DARKER
+  desc: liner notes Background choice: the page's picture blurred and darkened
+  user: core
+  <source>
+    *: "Blurred Darker"
+  </source>
+  <dest>
+    *: "Blurred Darker"
+  </dest>
+  <voice>
+    *: "Blurred Darker"
+  </voice>
+</phrase>

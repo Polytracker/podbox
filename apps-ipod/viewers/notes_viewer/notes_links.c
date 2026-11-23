@@ -19,7 +19,7 @@
  * the page's artist's, then anywhere -- and (section), a heading of the page
  * the link is on. A piece's track is written "(track N)", N its database
  * entry, as titles repeat across albums and a search for one reads every
- * title in the library.
+ * title in the library; "(notes N)" is the same track's notes icon.
  *
  * The library's side comes from the database's RAM copy alone: its album
  * table, with each album's keys worked out once for a screen into the
@@ -306,8 +306,9 @@ bool notes_album_by(int album, long seek)
 
 /* The reserved qualifier `len` bytes of `name` end with, NL_ANY for none;
  * a list's "(track N)" is NL_TRACK with the database entry N in `entry`,
- * else -1 */
-static int nl_reserved(const char *name, size_t len, size_t bare, int *entry)
+ * else -1, and its "(notes N)" the same with `*notes` set */
+static int nl_reserved(const char *name, size_t len, size_t bare, int *entry,
+                       bool *notes)
 {
     static const char *const words[] = { "album", "person", "track",
                                          "section" };
@@ -316,13 +317,16 @@ static int nl_reserved(const char *name, size_t len, size_t bare, int *entry)
     unsigned i;
 
     *entry = -1;
+    *notes = false;
     if (bare == len)
         return NL_ANY;
     for (i = 0; i < ARRAYLEN(words); i++)
         if (qlen == strlen(words[i]) && !strncasecmp(q, words[i], qlen))
             return i + 1;
-    if (qlen > 6 && qlen <= 6 + 9 && !strncasecmp(q, "track ", 6))
+    if (qlen > 6 && qlen <= 6 + 9 && (!strncasecmp(q, "track ", 6)
+                                      || !strncasecmp(q, "notes ", 6)))
     {
+        *notes = (q[0] | 0x20) == 'n';
         int n = 0;
 
         for (i = 6; i < qlen && q[i] >= '0' && q[i] <= '9'; i++)
@@ -516,10 +520,12 @@ bool notes_link_find(const char *name, size_t len, uint32_t artist,
                      int album, struct notes_target *t)
 {
     size_t bare = notes_bare_len(name, len);
-    int entry, kind = nl_reserved(name, len, bare, &entry), i;
+    bool notes;
+    int entry, kind = nl_reserved(name, len, bare, &entry, &notes), i;
     const char *dash;
     struct nl_keys k;
 
+    t->notes = notes;
     t->to = NOTES_TO_NONE;
     t->page = t->album = t->track = -1;
     t->artist_seek = -1;
@@ -530,7 +536,7 @@ bool notes_link_find(const char *name, size_t len, uint32_t artist,
     k.alt = art_name_alt_hash_n(name, len);
     k.artist = artist;
     k.work = 0;
-    if (!k.key)
+    if (!k.key && !notes)               /* an icon's name is no word */
         return false;
 
     if (kind == NL_SECTION)
@@ -543,7 +549,8 @@ bool notes_link_find(const char *name, size_t len, uint32_t artist,
         /* The entry a list named, while it still has that title; else the
          * whole name: a title may hold " - " of its own, as "Pink Up -
          * Live" does; then "Artist - Title" */
-        if ((i = tagcache_album_of(entry)) >= 0 && nl_titled(entry, k.key))
+        if ((i = tagcache_album_of(entry)) >= 0
+            && (notes || nl_titled(entry, k.key)))
         {
             t->track = entry;
             t->album = nl_last_album = i;

@@ -87,6 +87,8 @@
 #include "screens/playback/wps.h"       /* wps_do_playpause */
 #include "screens/browse/browser_db.h"  /* Go to Album, Go to Artist */
 #include "metadata/art_cache.h"
+#include "metadata/art_sizes.h"             /* AA_COLUMNS */
+#include "draw/img_filter.h"                /* Blurred */
 #include "metadata/art_banner.h"
 #include "metadata/art_name.h"
 #include "metadata/name_index.h"
@@ -122,6 +124,13 @@
 #define NV_FADE         92          /* rows over which the picture fades */
 #define NV_MOVE_SHOW    240         /* the picture, on Move Banner's screen */
 #define NV_MOVE_STEP    4           /* rows of the 300px picture a click */
+/* Blurred: the picture at half the screen's size, doubled as it is drawn,
+ * and below it the same upside down, so the pair repeats without an edge */
+#define NV_BACK_W       (LCD_WIDTH / 2)
+#define NV_BACK_H       (LCD_HEIGHT / 2)
+#define NV_BACK_BYTES   (NV_BACK_W * 2 * NV_BACK_H * FB_DATA_SZ)
+#define NV_BLUR         "blur6+scrim:ffffff+dither"
+#define NV_BLUR_DARKER  "blur6+darker+scrim:ffffff+dither"
 
 /* What each laid-out line is */
 #define NV_HEAD     1       /* part of a heading */
@@ -160,7 +169,9 @@ struct nv_hist
  * again once the library or the pages are renumbered */
 enum { NV_BY_TARGET, NV_BY_ALBUM, NV_BY_NAME, NV_BY_LINK };
 
-/* A request's focus: the track an album request's path names */
+/* A request's focus: the track an album request's path names; or, 0 and
+ * up, the database entry of a track whose section a page of its album's
+ * holds, the page the request names */
 #define NV_FOCUS_TRACK (-2)
 
 struct nv_req
@@ -169,7 +180,7 @@ struct nv_req
     struct notes_target t;
     const struct notes_album *album;    /* its names and a track's path */
     const char *name;
-    int focus;                  /* -1, or NV_FOCUS_TRACK */
+    int focus;                  /* -1, NV_FOCUS_TRACK, or an entry */
 };
 
 static struct
@@ -185,7 +196,14 @@ static struct
 
     /* the app buffer, carved up */
     char *work;                 /* a page while it is made, then a picture */
-    size_t work_size;
+    size_t work_size, work_full;
+
+    /* Blurred's picture, carved from the end of the work area while the
+     * setting asks for it, and kept for the next page that has none */
+    fb_data *back;
+    bool back_valid;
+    int back_mode;
+    unsigned int back_key;
 
     /* The banner on screen, kept under its page's key: a page opened again
      * (after Move Banner, or a link to itself) does not make it again */
@@ -251,7 +269,7 @@ static struct
 #define NV_BUF_BYTES    (NV_FIXED_BYTES + MAX(NV_THUMB_BYTES, NV_BUILD_BYTES))
 /* The 5G's app buffer is 512 KB: past it, the screen would not open. The
  * library's links and the names index take what is left over. */
-_Static_assert(NV_BUF_BYTES <= PLUGIN_BUFFER_SIZE,
+_Static_assert(NV_BUF_BYTES + NV_BACK_BYTES <= PLUGIN_BUFFER_SIZE,
                "the notes screen's buffer is too big for the app buffer");
 
 /* `s`, copied into a box too small for it, cut back to its last whole
@@ -308,10 +326,16 @@ static int nv_luma(unsigned c)
 static bool nv_art_valid;
 static unsigned nv_art_dominant, nv_art_vivid;
 
+static bool nv_blurred(void)
+{
+    return global_settings.liner_notes_background != NOTES_BG_PLAIN;
+}
+
 /* Whether the page's colours come from its picture */
 static bool nv_uses_art(void)
 {
-    return global_settings.liner_notes_colours == NOTES_COLOURS_ART
+    return nv_blurred()
+           || global_settings.liner_notes_colours == NOTES_COLOURS_ART
            || (global_settings.liner_notes_colours == NOTES_COLOURS_CUSTOM
                && (global_settings.liner_notes_text == NOTES_FROM_ART
                    || global_settings.liner_notes_links == NOTES_FROM_ART
@@ -473,6 +497,15 @@ static void nv_colours(void)
                            rgb[4]);
         nv.quote = nv_style(global_settings.liner_notes_quote, ac, nv.quote,
                             rgb[5]);
+    }
+    if (nv_blurred())
+    {
+        /* white over the picture, which the blur's scrim holds dark enough
+         * for it; the picture's vivid colour held light for the links */
+        nv.fg = nv.head = LCD_WHITE;
+        nv.bg = LCD_BLACK;
+        nv.dim = LCD_RGBPACK(0xcc, 0xcc, 0xcc);
+        nv.accent = nv.quote = nv_readable(nv_vivid(ac), true);
     }
     nv.rule = color_blend(nv.fg, nv.bg, 218);
     nv.track = color_blend(nv.fg, nv.bg, 210);
@@ -704,6 +737,20 @@ static bool nv_banner_album(const char *artist, const char *album,
     return true;
 }
 
+/* A banner the size of the screen's beside the page file `page`, its .jpg,
+ * drawn as it is: the notes wiki's scraper writes them so */
+static bool nv_banner_exact(const char *page)
+{
+    char path[MAX_PATH];
+    const char *dot = page ? strrchr(page, '.') : NULL;
+
+    if (!dot || (size_t)(dot - page) + 5 > sizeof(path))
+        return false;
+    snprintf(path, sizeof(path), "%.*s.jpg", (int)(dot - page), page);
+    return art_banner_exact(path)
+           && art_banner_draw(path, nv.banner, nv.work, nv.work_size);
+}
+
 /* The page's banner, kept when it is the page on screen already. The work
  * area is a picture after this. */
 static void nv_banner(void)
@@ -730,6 +777,7 @@ static void nv_banner(void)
     nv.has_banner = false;
     if (d->kind == NOTES_PAGE_ALBUM)
     {
+        static struct notes_pages p;
         struct tagcache_album row;
         char artist[NV_NAME_MAX], album[NV_NAME_MAX];
 
@@ -738,12 +786,23 @@ static void nv_banner(void)
                                     sizeof(artist))
             && tagcache_seek_string(tag_album, row.album_seek, album,
                                     sizeof(album)))
-            nv.has_banner = nv_banner_album(strcmp(artist, UNTAGGED)
-                                            ? artist : NULL,
-                                            album, row.art_hash);
+        {
+            const char *by = strcmp(artist, UNTAGGED) ? artist : NULL;
+
+            /* The album's own page's picture, for its other pages too */
+            nv.has_banner =
+                (notes_find_names(by, NULL, album, NULL, &p) & NOTES_ALBUM
+                 && nv_banner_exact(p.album))
+                || nv_banner_album(by, album, row.art_hash);
+        }
     }
     else if (d->kind == NOTES_PAGE_PERSON && d->title[0])
-        nv.has_banner = nv_banner_person(d->title);
+    {
+        const struct notes_page *pg = notes_page_get(d->page);
+
+        nv.has_banner = (pg && nv_banner_exact(notes_page_path(pg)))
+                        || nv_banner_person(d->title);
+    }
 
     nv.slot.valid = true;
     nv.slot.id = id;
@@ -752,6 +811,94 @@ static void nv_banner(void)
     nv.slot.pic_key = nv.pic_key;
     nv.slot.band_key = nv.band_key;
     nv.slot.band_default = nv.band_default;
+}
+
+/* Blurred's room at the end of the work area, while the setting asks for
+ * it; the picture there is let go when the setting changes */
+static void nv_carve(void)
+{
+    int mode = global_settings.liner_notes_background;
+
+    nv.work_size = nv.work_full;
+    nv.back = NULL;
+    if (nv_blurred())
+    {
+        nv.work_size = ALIGN_DOWN(nv.work_full - NV_BACK_BYTES, 4);
+        nv.back = (fb_data *)(nv.work + nv.work_size);
+    }
+    if (mode != nv.back_mode)
+        nv.back_valid = false;
+    nv.back_mode = mode;
+}
+
+/* Blurred's picture of the page: from the art cache's 128px thumbnail of
+ * its cover or person, the one its colours come from, blurred at half the
+ * screen's size. A page with none keeps the last. The work area is free. */
+static void nv_backdrop(void)
+{
+    static int size = -2;
+    static struct img_filter f;
+    struct tagcache_album row;
+    struct art_cache_header hdr;
+    struct img_levels lv;
+    char path[MAX_PATH];
+    fb_data *col = (fb_data *)nv.work, *px;
+    unsigned int key = 0;
+    int dim, fd, x, y;
+    ssize_t bytes;
+    bool ok;
+
+    if (!nv.back)
+        return;
+    if (nv.doc.kind == NOTES_PAGE_ALBUM && nv.doc.album >= 0
+        && tagcache_album_get(nv.doc.album, &row))
+        key = row.art_hash;
+    else if (nv.doc.kind == NOTES_PAGE_PERSON)
+        key = nv.doc.artist ? nv.doc.artist : art_name_hash(nv.doc.title);
+    if (size == -2)
+        size = art_cache_size_index("coverflow");
+    if (!key || size < 0 || (nv.back_valid && key == nv.back_key))
+        return;
+    dim = art_cache_size_dim(size);
+    bytes = (ssize_t)dim * dim * FB_DATA_SZ;
+    if (dim <= 0 || 2 * bytes > (ssize_t)nv.work_size)
+        return;
+    art_cache_thumb_path(key, size, path, sizeof(path));
+    if ((fd = open(path, O_RDONLY)) < 0)
+        return;
+    ok = read(fd, &hdr, sizeof(hdr)) == (ssize_t)sizeof(hdr)
+         && hdr.magic == ART_CACHE_MAGIC
+         && hdr.version == ART_CACHE_FORMAT_VERSION
+         && hdr.width == dim && hdr.height == dim
+         && read(fd, col, bytes) == bytes;
+    close(fd);
+    if (!ok || !img_filter_compile(nv.back_mode == NOTES_BG_BLURRED_DARKER
+                                   ? NV_BLUR_DARKER : NV_BLUR,
+                                   IMG_CLASSES_ALL, &f))
+        return;
+    px = col;
+    if (hdr.layout == AA_COLUMNS)
+    {
+        px = col + dim * dim;
+        for (x = 0; x < dim; x++)
+            for (y = 0; y < dim; y++)
+                px[y * dim + x] = col[x * dim + y];
+    }
+    img_filter_measure(px, dim, dim, &lv);
+    img_filter_adapt(&f, &lv, 255);
+    img_filter_render(nv.back, NV_BACK_W, NV_BACK_H, px, dim, dim, &f);
+    for (y = 0; y < NV_BACK_H; y++)
+        memcpy(nv.back + (size_t)(2 * NV_BACK_H - 1 - y) * NV_BACK_W,
+               nv.back + (size_t)y * NV_BACK_W, NV_BACK_W * FB_DATA_SZ);
+    nv.back_valid = true;
+    nv.back_key = key;
+}
+
+/* Blurred's picture's row under screen row `y`, as the page has scrolled */
+static const fb_data *nv_back_row(int y)
+{
+    return nv.back + (size_t)(((nv.scroll + y) >> 1) % (2 * NV_BACK_H))
+                     * NV_BACK_W;
 }
 
 /* ---- a page: its Markdown, its lines and its links --------------------- */
@@ -1308,6 +1455,7 @@ static void nv_draw_banner(void)
     for (y = MAX(0, solid); y < rows; y++)
     {
         const fb_data *src = nv.banner + (size_t)(y + back) * NV_BAN_W;
+        const fb_data *under = nv.back_valid ? nv_back_row(y) : NULL;
         uint32_t t = (y - (edge - NV_FADE)) * 32 / NV_FADE;
         uint32_t bgt = bg * t;
 
@@ -1316,10 +1464,33 @@ static void nv_draw_banner(void)
             uint32_t p = ((uint32_t)src[x] | ((uint32_t)src[x] << 16))
                          & 0x07e0f81f;
 
+            if (under)          /* into the picture behind the text */
+                bgt = (((uint32_t)under[x >> 1]
+                        | ((uint32_t)under[x >> 1] << 16)) & 0x07e0f81f) * t;
             p = ((p * (32 - t) + bgt) >> 5) & 0x07e0f81f;
             row[x] = (fb_data)(p | (p >> 16));
         }
         d->bitmap_part(row, 0, 0, NV_BAN_W, 0, y, NV_BAN_W, 1);
+    }
+}
+
+/* Blurred's picture behind the page, each pixel doubled */
+static void nv_draw_backdrop(void)
+{
+    static fb_data row[LCD_WIDTH];
+    const fb_data *src, *last = NULL;
+    int x, y;
+
+    for (y = 0; y < LCD_HEIGHT; y++)
+    {
+        if ((src = nv_back_row(y)) != last)
+        {
+            for (x = 0; x < NV_BACK_W; x++)
+                row[2 * x] = row[2 * x + 1] = src[x];
+            last = src;
+        }
+        screens[SCREEN_MAIN].bitmap_part(row, 0, 0, LCD_WIDTH, 0, y,
+                                         LCD_WIDTH, 1);
     }
 }
 
@@ -1331,7 +1502,10 @@ static void nv_draw(void)
     d->set_foreground(nv.fg);
     d->set_background(nv.bg);
     d->set_drawmode(DRMODE_SOLID);
-    d->clear_viewport();
+    if (nv.back_valid)
+        nv_draw_backdrop();
+    else
+        d->clear_viewport();
     /* Text is drawn over the banner as well as the page, so only its own
      * pixels: no box of background behind it */
     d->set_drawmode(DRMODE_FG);
@@ -1824,6 +1998,9 @@ MENUITEM_SETTING(nv_heads_item, &global_settings.liner_notes_heads,
                  nv_custom_callback);
 MENUITEM_SETTING(nv_quote_item, &global_settings.liner_notes_quote,
                  nv_custom_callback);
+MENUITEM_SETTING(nv_background_item,
+                 &global_settings.liner_notes_background,
+                 nv_setting_callback);
 MENUITEM_SETTING(nv_banners_item, &global_settings.liner_notes_banners,
                  nv_setting_callback);
 MENUITEM_SETTING(nv_progress_item, &global_settings.liner_notes_progress,
@@ -1833,8 +2010,8 @@ MAKE_MENU(nv_menu, ID2P(LANG_ONPLAY_MENU_TITLE), NULL, Icon_NOICON,
           &nv_page_5, &nv_page_6, &nv_page_7, &nv_play_item, &nv_next_item, &nv_last_item, &nv_go_album_item,
           &nv_go_artist_item, &nv_move_item, &nv_reset_item, &nv_colours_item,
           &nv_text_item, &nv_links_item, &nv_page_item, &nv_dim_item,
-          &nv_heads_item, &nv_quote_item, &nv_banners_item,
-          &nv_progress_item);
+          &nv_heads_item, &nv_quote_item, &nv_background_item,
+          &nv_banners_item, &nv_progress_item);
 
 /* The settings the page's menu offers, to see whether one changed */
 static uint32_t nv_settings_sum(void)
@@ -1845,7 +2022,8 @@ static uint32_t nv_settings_sum(void)
                    | s->liner_notes_page << 9 | s->liner_notes_dim << 12
                    | s->liner_notes_heads << 15 | s->liner_notes_quote << 18
                    | s->liner_notes_banners << 21
-                   | s->liner_notes_progress << 22;
+                   | s->liner_notes_progress << 22
+                   | s->liner_notes_background << 23;
     unsigned i;
 
     for (i = 0; i < ARRAYLEN(s->liner_notes_rgb); i++)
@@ -2003,6 +2181,55 @@ static void nv_album_pages(const struct name_index *ix)
     }
 }
 
+/* Which of the page's album's other pages (nv.pages) has a section for the
+ * track titled `key` on disc `disc`: its heading, as a page's own track
+ * section is found. Each is read whole into `buf`, `size` bytes. -1 for
+ * none. */
+static int nv_track_part(uint32_t key, long disc, char *buf, size_t size)
+{
+    char text[NV_NAME_MAX];
+    int i;
+
+    for (i = 0; key && i < nv.npages; i++)
+    {
+        const struct notes_page *pg;
+        const char *s;
+        int fd, got, on = 0;
+
+        if (nv.pages[i].to != NOTES_TO_PAGE
+            || !(pg = notes_page_get(nv.pages[i].page))
+            || (fd = open(notes_page_path(pg), O_RDONLY)) < 0)
+            continue;
+        got = read(fd, buf, size - 1);
+        close(fd);
+        buf[MAX(got, 0)] = '\0';
+        for (s = buf; s && *s; s = strchr(s, '\n'), s = s ? s + 1 : NULL)
+        {
+            size_t n = 0;
+
+            if (*s != '#')
+                continue;
+            while (*s == '#')
+                s++;
+            while (*s == ' ')
+                s++;
+            while (s[n] && s[n] != '\n' && s[n] != '\r'
+                   && n + 1 < sizeof(text))
+            {
+                text[n] = s[n];
+                n++;
+            }
+            text[n] = '\0';
+            if (nv_disc_heading(text))
+                on = nv_disc_heading(text);
+            else if ((!on || on == disc)
+                     && art_name_hash(notes_numbered(text)) == key)
+                return i;
+        }
+    }
+    return -1;
+}
+
 /* The link name that finds the page again: an album by its artist and title,
  * a written page by its file's name, else the name it is shown by */
 static void nv_stamp(void)
@@ -2068,7 +2295,11 @@ static bool nv_build(const struct nv_req *r)
     notes_links_begin(albums, albums ? need : 0, have_ix ? &nv.ix : NULL);
 
     if (r->by == NV_BY_TARGET)
+    {
         t = r->t;
+        if (r->focus >= 0)
+            focus = r->focus;
+    }
     else if (r->by == NV_BY_ALBUM)
     {
         if (!nv_album_target(r->album, &t,
@@ -2132,6 +2363,17 @@ static bool nv_build(const struct nv_req *r)
                          && art_name_hash(notes_numbered(text)) == key)
                     line = i;
             }
+        /* Its section on another of the album's pages, its Tracks: that
+         * page instead, at the section */
+        if (line < 0 && r->focus < 0
+            && (i = nv_track_part(key, track_disc, file, NV_FILE_MAX)) >= 0)
+        {
+            struct nv_req sub = { NV_BY_TARGET, nv.pages[i], NULL, NULL,
+                                  focus };
+
+            notes_links_end();
+            return nv_build(&sub);
+        }
         for (i = 0; line < 0 && i < nv.nlinks; i++)
             if (nv.links[i].t.to == NOTES_TO_TRACK
                 && nv.links[i].t.track == focus)
@@ -2157,11 +2399,13 @@ static bool nv_open(const struct nv_req *r)
     int block;
 
     nv.focus_line = -1;
+    nv_carve();
     if (!nv_build(r))
         return false;
     nv_art_palette();
     nv_colours();
     nv_banner();
+    nv_backdrop();
     block = nv.name_h;
     nv.name_y = nv.has_banner ? NV_BAN_H - 6 - block : 8;
     nv.text_top = nv.name_y + block + 10;
@@ -2269,6 +2513,18 @@ static void nv_to_section(uint32_t key)
     nv_scroll_to(i);
     nv.cur = nv_natural(false);
     nv_draw();
+}
+
+/* Whether two targets open the same page: a track's is its album's */
+static bool nv_same_page(const struct notes_target *a,
+                         const struct notes_target *b)
+{
+    int ta = a->to == NOTES_TO_TRACK ? NOTES_TO_ALBUM : a->to;
+    int tb = b->to == NOTES_TO_TRACK ? NOTES_TO_ALBUM : b->to;
+
+    return ta == tb && a->page == b->page && a->album == b->album
+           && a->artist_seek == b->artist_seek
+           && (ta != NOTES_TO_NAME || a->key == b->key);
 }
 
 /* Back to the page before, where it was left; false when there is none */
@@ -2388,7 +2644,9 @@ static bool nv_claim(void)
     nv.links = (struct nv_link *)p;
     p += NV_LINKS_MAX * sizeof(struct nv_link);
     nv.work = p;
-    nv.work_size = buf + size - p;
+    nv.work_full = nv.work_size = buf + size - p;
+    nv.back_valid = false;
+    nv_carve();
     nv.slot.valid = false;
     nv.nlines = nv.nlinks = 0;
     nv.cur = -1;
@@ -2561,7 +2819,7 @@ static int nv_select(void)
         nv_to_section(t->key);
         return -1;
     }
-    if (t->to == NOTES_TO_TRACK && t->album == nv.doc.album)
+    if (t->to == NOTES_TO_TRACK && t->album == nv.doc.album && !t->notes)
     {
         nv.play_album = t->album;
         nv.play_track = t->track;
@@ -2592,10 +2850,15 @@ static int nv_play_on_leaving(int ret)
 static int nv_run(const struct nv_req *r)
 {
     int ret = GO_TO_PREVIOUS;
+    bool shown = false;
 
     if (!nv_claim())
         return GO_TO_PREVIOUS;
-    nv.nhist = 0;
+    /* The history the screen was last left with, the page left on top, is
+     * kept while its numbers hold: the library and the pages as they were
+     * when that page was made */
+    if (nv_stale())
+        nv.nhist = 0;
     nv.play_album = nv.play_track = -1;
     push_current_activity(ACTIVITY_TEXTVIEWER);
     nv_setup_screen();
@@ -2611,6 +2874,10 @@ static int nv_run(const struct nv_req *r)
             ret = GO_TO_ROOT;
         goto done;
     }
+    shown = true;
+    /* Coming back to the page left, it is not a page to go back to */
+    if (nv.nhist && nv_same_page(&nv.hist[nv.nhist - 1].t, &nv.t))
+        nv.nhist--;
     nv_draw();
 
     while (1)
@@ -2722,6 +2989,12 @@ static int nv_run(const struct nv_req *r)
     }
 
   done:
+    if (shown)
+    {
+        struct nv_hist h = { nv.t, nv.scroll, nv.cur };
+
+        nv_push(&h);
+    }
     viewportmanager_theme_undo(SCREEN_MAIN, false);
     pop_current_activity();
     nv_release();

@@ -695,6 +695,7 @@ struct user_settings
     int liner_notes_rgb[6];         /* each one's Chosen Colour, native, in
                                        that order: text, links, page, dim,
                                        heads, quote */
+    int liner_notes_background;     /* NOTES_BG_*, notes_viewer.h */
     bool liner_notes_banners;       /* the picture at the top of a page */
     bool liner_notes_progress;      /* the line along the foot */
     /* Which of the rows above a Music list are shown: [All Tracks],

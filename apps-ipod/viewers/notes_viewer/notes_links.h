@@ -31,6 +31,8 @@ struct notes_target
                                    album artist (notes_artist_seek()), or -1 */
     int track;                  /* NOTES_TO_TRACK's idx_id, else -1 */
     uint32_t key;               /* the name's key */
+    bool notes;                 /* a track's notes icon: following it opens
+                                   the track's section, not its music */
 };
 
 /* The library's albums as links match them, worked out into `buf` once

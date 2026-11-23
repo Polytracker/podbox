@@ -65,6 +65,7 @@
 #define NS_VALUE_MAX 192
 #define NS_TEMPLATES ROCKBOX_DIR "/notes"
 #define NS_DOT       " \xc2\xb7 "   /* the separator values are left out with */
+#define NS_NOTES_ICON "\xc2\xb6"    /* a track's notes icon: the pilcrow */
 
 /* ---- what a page is about ---------------------------------------------- */
 
@@ -1169,6 +1170,25 @@ static bool ns_number_wanted(const struct ns_piece *pc, long tn)
     return false;
 }
 
+/* Whether {{tracks}}'s `notes=2,5,7` names track number `tn`: a track with
+ * a write-up on one of its album's pages, which gets a notes icon */
+static bool ns_has_notes(const struct ns_piece *pc, long tn)
+{
+    size_t len;
+    const char *v = ns_get(pc, "notes", &len), *end;
+
+    for (end = v ? v + len : v; v && v < end; v++)
+    {
+        while (v < end && (*v == ' ' || *v == ','))
+            v++;
+        if (v < end && atoi(v) == tn && tn > 0)
+            return true;
+        while (v < end && *v != ',')
+            v++;
+    }
+    return false;
+}
+
 /* {{tracks}}: an album's tracks, an artist's, or a composer's; for
  * `played`, {{played}}, those played, the last played first */
 static int ns_tracks(const struct ns_piece *pc, const struct notes_doc *d,
@@ -1304,6 +1324,12 @@ static int ns_tracks(const struct ns_piece *pc, const struct notes_doc *d,
         {
             snprintf(ns_buf, sizeof(ns_buf), "*%d*  ",
                      num_of[at] > 0 ? num_of[at] : i + 1);
+            ns_puts(o, ns_buf);
+        }
+        if (ns_has_notes(pc, num_of[at]))
+        {
+            snprintf(ns_buf, sizeof(ns_buf), "[" NS_NOTES_ICON " (notes %d)] ",
+                     idx);
             ns_puts(o, ns_buf);
         }
         ns_puts(o, label);

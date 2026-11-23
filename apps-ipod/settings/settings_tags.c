@@ -231,6 +231,7 @@ static const struct tag_row tag_rows[] = {
 { "liner notes dim colour", TAG_LIBRARY|TAG_APPEARANCE,          "notes custom colour color dimmed grey" },
 { "liner notes heading colour", TAG_LIBRARY|TAG_APPEARANCE,      "notes custom colour color headings titles" },
 { "liner notes pull line colour", TAG_LIBRARY|TAG_APPEARANCE,    "notes custom colour color quote rule" },
+{ "liner notes background", TAG_LIBRARY|TAG_APPEARANCE,          "notes page blurred art backdrop picture" },
 { "liner notes banners", TAG_LIBRARY|TAG_APPEARANCE,             "notes page picture banner image" },
 { "liner notes progress line", TAG_LIBRARY|TAG_APPEARANCE,       "notes page progress bar playing position" },
 { "trim titles",         TAG_LIBRARY|TAG_APPEARANCE,             "tidy shorten feat remaster version" },

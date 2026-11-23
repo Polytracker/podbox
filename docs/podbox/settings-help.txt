@@ -847,6 +847,12 @@ Colour opens the colour picker.
 The colour of the line beside a pull line, written > like this, under
 Custom. Auto is the link colour. Chosen Colour opens the colour picker.
 
+[liner notes background]
+What lies behind a page's text. Plain is the page's colour, as Colours
+sets it. Blurred is the page's own cover or picture, blurred, under white
+text, and moves with the page; Blurred Darker takes a light picture down
+further. A page with no picture keeps the last page's.
+
 [liner notes banners]
 Shows a picture at the top of each page: your own, or a band of the
 artist's picture or the album's cover. Off, every page starts with its name,

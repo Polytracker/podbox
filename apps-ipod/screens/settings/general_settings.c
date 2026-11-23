@@ -1211,6 +1211,8 @@ MENUITEM_SETTING(liner_notes_heads, &global_settings.liner_notes_heads,
                  liner_notes_custom_callback);
 MENUITEM_SETTING(liner_notes_quote, &global_settings.liner_notes_quote,
                  liner_notes_custom_callback);
+MENUITEM_SETTING(liner_notes_background,
+                 &global_settings.liner_notes_background, NULL);
 MENUITEM_SETTING(liner_notes_banners, &global_settings.liner_notes_banners,
                  NULL);
 MENUITEM_SETTING(liner_notes_progress, &global_settings.liner_notes_progress,
@@ -1218,8 +1220,8 @@ MENUITEM_SETTING(liner_notes_progress, &global_settings.liner_notes_progress,
 MAKE_MENU(liner_notes_menu, ID2P(LANG_NOTES_SETTING), 0, Icon_NOICON,
           &liner_notes, &liner_notes_colours, &liner_notes_text,
           &liner_notes_links, &liner_notes_page, &liner_notes_dim,
-          &liner_notes_heads, &liner_notes_quote, &liner_notes_banners,
-          &liner_notes_progress);
+          &liner_notes_heads, &liner_notes_quote, &liner_notes_background,
+          &liner_notes_banners, &liner_notes_progress);
 MENUITEM_SETTING(segregate_audiobooks, &global_settings.segregate_audiobooks,
                  NULL);
 MENUITEM_SETTING(segregate_podcasts, &global_settings.segregate_podcasts,

@@ -18,6 +18,14 @@ enum
     NOTES_COLOURS_CUSTOM,       /* text, links and page each chosen */
 };
 
+/* liner_notes_background: what lies behind a page's text */
+enum
+{
+    NOTES_BG_PLAIN = 0,         /* the page's colour */
+    NOTES_BG_BLURRED,           /* its picture, blurred, under white text */
+    NOTES_BG_BLURRED_DARKER,    /* the same, a light picture taken down */
+};
+
 /* Under Custom, where the text, the links or the page take their colour */
 enum
 {

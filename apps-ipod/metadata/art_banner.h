@@ -26,6 +26,14 @@
  * false then. */
 bool art_banner_sweep(void *workbuf, size_t worksz, bool (*stop)(void));
 
+/* Whether the picture at `path` is a JPEG of exactly the banner's size,
+ * which is drawn as it is rather than cached: art_banner_draw() */
+bool art_banner_exact(const char *path);
+
+/* The exact-size picture at `path` decoded into `px`, a banner's pixels,
+ * with `buf`, `size` bytes, to work in. False when it would not decode. */
+bool art_banner_draw(const char *path, void *px, void *buf, size_t size);
+
 /* Forgets every cached banner, so the next sweep makes them all again */
 void art_banner_forget(void);
 
