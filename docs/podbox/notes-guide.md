@@ -46,7 +46,8 @@ You can keep pages with the music instead, as you might a `cover.jpg`:
 
 They are named by their folders, exactly as though they were in `/Notes`,
 so links reach them the same way. Where `/Notes` has a page of the same
-name, that one is used.
+name, that one is used. With a wiki a program wrote (below), this is the
+place for pages of your own.
 
 ## Links
 
@@ -444,6 +445,11 @@ their credits and the people on them -- can leave an empty file called
 `.notes-wiki` in `/Notes`. The player then doesn't list `/Notes` after you
 connect it, and keeps no list of its pages in memory, however many there
 are: each page is opened from its file.
+
+**Pages you write yourself go beside the music** (see *Beside the music*
+above) once the file is there. A page you add to `/Notes` is not listed,
+so a `[Name]` link and `{{mentions}}` never find it: only a link
+that names its place reaches it.
 
 - Every link has to name its page's place, `[Steve Gadd](People/Steve
   Gadd)`. A `[Name]` alone finds only pages beside the music.
