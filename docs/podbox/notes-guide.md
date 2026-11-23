@@ -437,6 +437,25 @@ you next connect to a computer, or after `Rebuild File Index`. `album:`
 also takes the title alone, `album: Aja`, which is the oldest album of that
 name in your library.
 
+## A wiki a program wrote
+
+A program that writes the whole wiki -- a page for every artist and album,
+their credits and the people on them -- can leave an empty file called
+`.notes-wiki` in `/Notes`. The player then doesn't list `/Notes` after you
+connect it, and keeps no list of its pages in memory, however many there
+are: each page is opened from its file.
+
+- Every link has to name its page's place, `[Steve Gadd](People/Steve
+  Gadd)`. A `[Name]` alone finds only pages beside the music.
+- An album's or an artist's page is the file its names give:
+  `/Notes/Albums/Artist - Album.md`, `/Notes/People/Artist.md`, with each
+  of `\ / : * ? " < > |` in a name written `_`, and no dot or space at its
+  end. An album's other pages are `Artist - Album - Credits`, `- Tracks`
+  (or `- Tracks 1` to `3`) and `- Other Appearances`.
+- `{{mentions}}` lists nothing: write the pages that name a page out.
+
+Take the file away, and connect the player, to go back to the list.
+
 ## Markdown files in the text viewer
 
 The text viewer reads the same marks in any `.md` file: headings are

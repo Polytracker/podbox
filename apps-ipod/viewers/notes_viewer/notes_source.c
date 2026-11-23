@@ -73,15 +73,42 @@
 static char ns_buf[NS_VALUE_MAX], ns_trim[NS_VALUE_MAX];
 
 /* The written page of `kind` about the library's album `album`, or about the
- * album artist whose key is `key` */
-static int ns_written(int kind, int album, uint32_t key)
+ * album artist whose key is `key` and name `name`: in a scraper's wiki the
+ * file page their names give, else the index's */
+static int ns_written(int kind, int album, uint32_t key, const char *name)
 {
+    static struct notes_pages files;
     const struct notes_page *best = NULL;
     struct tagcache_album row;
     int i, found = -1, n = notes_page_count();
 
     if (kind == NOTES_PAGE_ALBUM ? !tagcache_album_get(album, &row) : !key)
         return -1;
+    if (notes_scraped())
+    {
+        static char by[NS_VALUE_MAX], title[NS_VALUE_MAX];
+        const char *path = NULL;
+
+        if (kind == NOTES_PAGE_PERSON && name && name[0]
+            && notes_find_names(name, NULL, NULL, NULL, &files) & NOTES_BIO)
+            path = files.bio;
+        else if (kind == NOTES_PAGE_ALBUM
+                 && tagcache_seek_string(tag_album, row.album_seek, title,
+                                         sizeof(title))
+                 && strcmp(title, UNTAGGED))
+        {
+            if (!tagcache_seek_string(tag_albumartist, row.artist_seek, by,
+                                      sizeof(by))
+                || !strcmp(by, UNTAGGED))
+                by[0] = '\0';
+            if (notes_find_names(by, NULL, title, NULL, &files)
+                & NOTES_ALBUM)
+                path = files.album;
+        }
+        if (path && notes_page_file(path + sizeof(NOTES_DIR),
+                                    strlen(path + sizeof(NOTES_DIR))) >= 0)
+            return NOTES_PAGE_FILE;
+    }
     for (i = 0; i < n; i++)
     {
         const struct notes_page *pg = notes_page_get(i);
@@ -150,7 +177,7 @@ static void ns_doc(const struct notes_target *t, struct notes_doc *d,
         d->artist = row.artist_art_hash;
         d->artist_seek = row.artist_seek;
         if (d->page < 0)
-            d->page = ns_written(NOTES_PAGE_ALBUM, d->album, 0);
+            d->page = ns_written(NOTES_PAGE_ALBUM, d->album, 0, NULL);
     }
     pg = notes_page_get(d->page);
     if (d->kind == NOTES_PAGE_PERSON)
@@ -165,7 +192,9 @@ static void ns_doc(const struct notes_target *t, struct notes_doc *d,
                 d->artist = art_name_hash(ns_buf);
             if (!pg)
                 pg = notes_page_get(d->page = ns_written(NOTES_PAGE_PERSON,
-                                                         -1, d->artist));
+                                                         -1, d->artist,
+                                                         d->artist ? ns_buf
+                                                                   : NULL));
         }
         if (!d->artist && pg)
             d->artist = pg->key;

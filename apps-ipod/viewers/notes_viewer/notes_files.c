@@ -25,8 +25,15 @@
  * page named by its key or its place (notes_page_at()) is found by halving.
  * Without a page there is no block.
  *
+ * A wiki a scraper wrote says so with NOTES_MARKER in /Notes. Then /Notes
+ * is not walked and its pages are not in the index: each is reached by its
+ * file. A labelled link names the file, and a library album's or artist's
+ * page is the file its names give (notes_file_name()). The page opened that
+ * way is the file page, NOTES_PAGE_FILE, one at a time.
+ *
  * Parts, in order:
  *   - the index: built by the walk, saved, read at boot, asked
+ *   - a scraper's wiki: the file page
  *   - the lookups for a track and an album
  *   - a page's front matter
  ****************************************************************************/
@@ -64,6 +71,8 @@
 static struct
 {
     bool loaded;                /* the index answers; else there are none */
+    bool scraped;               /* NOTES_MARKER was there at the last load
+                                   or walk */
     unsigned int generation;    /* counts each index loaded or replaced */
     int npages, pool_used;
     int handle;                 /* the block, 0 for none */
@@ -174,6 +183,7 @@ bool notes_where_load(void)
 
     nw.loaded = false;
     nw.generation++;
+    nw.scraped = file_exists(NOTES_DIR "/" NOTES_MARKER);
     if (fd < 0)
         return false;
     ok = read(fd, &h, sizeof(h)) == (ssize_t)sizeof(h) && h.magic == NW_MAGIC
@@ -201,6 +211,7 @@ unsigned int notes_pages_generation(void)
 
 void notes_where_begin(void)
 {
+    nw.scraped = file_exists(NOTES_DIR "/" NOTES_MARKER);
     if (nw_stage >= 0)
         close(nw_stage);
     nw_stage = open(NW_STAGE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
@@ -444,14 +455,102 @@ int notes_page_count(void)
     return nw.loaded && global_settings.liner_notes ? nw.npages : 0;
 }
 
+/* ---- a scraper's wiki: the file page ----------------------------------- */
+
+static struct notes_page nw_file;
+static char nw_file_path[MAX_PATH];
+static bool nw_file_valid;
+
+bool notes_scraped(void)
+{
+    return nw.scraped && global_settings.liner_notes;
+}
+
+void notes_file_name(char *buf, size_t size, const char *name)
+{
+    size_t n = 0;
+
+    for (; *name && n + 1 < size; name++)
+        buf[n++] = strchr("\\/:*?\"<>|", *name) ? '_' : *name;
+    while (n && (buf[n - 1] == '.' || buf[n - 1] == ' '))
+        n--;
+    buf[n] = '\0';
+}
+
+/* The page file at `len` bytes of `rel`, its place under /Notes with or
+ * without its extension: its path into `path` (.md, else .txt) and its
+ * keys into `pg`; false when there is no such file. With `look` false the
+ * file is not looked for, and taken to be .md. */
+static bool nw_file_look(const char *rel, size_t len, char *path,
+                         struct notes_page *pg, bool look)
+{
+    static char want[MAX_PATH];
+    const char *leaf, *dot;
+    int rank;
+
+    if (!global_settings.liner_notes
+        || len + sizeof(NOTES_DIR) + 5 > sizeof(want))
+        return false;
+    memcpy(want, rel, len);
+    want[len] = '\0';
+    leaf = strrchr(want, '/');
+    leaf = leaf ? leaf + 1 : want;
+    if ((dot = strrchr(leaf, '.')) && notes_ext_rank(dot))
+        want[len = dot - want] = '\0';
+    if (!*leaf || leaf == want)
+        return false;
+    for (rank = 2; rank > 0; rank--)
+    {
+        snprintf(path, MAX_PATH, NOTES_DIR "/%s%s", want,
+                 rank == 2 ? ".md" : ".txt");
+        if (!look || file_exists(path))
+            break;
+    }
+    if (!rank)
+        return false;
+    nw_keys(want, leaf, want + len - leaf, pg);
+    pg->rank = rank;
+    return true;
+}
+
+static bool nw_file_find(const char *rel, size_t len, char *path,
+                         struct notes_page *pg)
+{
+    return nw_file_look(rel, len, path, pg, true);
+}
+
+bool notes_file_path(const char *rel, size_t len, char *path)
+{
+    struct notes_page pg;
+
+    return nw_file_find(rel, len, path, &pg);
+}
+
+bool notes_file_keys(const char *rel, size_t len, struct notes_page *pg)
+{
+    static char path[MAX_PATH];
+
+    /* A scraper links only to pages it wrote: a link costs no lookup, and
+     * its file is looked for when it is followed */
+    return nw_file_look(rel, len, path, pg, !notes_scraped());
+}
+
+int notes_page_file(const char *rel, size_t len)
+{
+    nw_file_valid = nw_file_find(rel, len, nw_file_path, &nw_file);
+    return nw_file_valid ? NOTES_PAGE_FILE : -1;
+}
+
 const struct notes_page *notes_page_get(int i)
 {
+    if (i == NOTES_PAGE_FILE)
+        return nw_file_valid && global_settings.liner_notes ? &nw_file : NULL;
     return i >= 0 && i < notes_page_count() ? &nw.pages[i] : NULL;
 }
 
 const char *notes_page_path(const struct notes_page *pg)
 {
-    return nw.pool + pg->path;
+    return pg == &nw_file ? nw_file_path : nw.pool + pg->path;
 }
 
 int notes_page_first(uint32_t key)
@@ -617,6 +716,42 @@ static void notes_beside(const char *track, unsigned int k1, unsigned int a1,
     p->have |= NOTES_BIO;
 }
 
+/* A scraper's pages of the album artist (or artist) and the album, by the
+ * files their names give */
+static void nw_find_files(const char *albumartist, const char *artist,
+                          const char *album, struct notes_pages *p)
+{
+    static char name[MAX_PATH], rel[MAX_PATH];
+    struct notes_page k;
+    const char *who[2] = { albumartist, artist };
+    int i;
+
+    for (i = 0; i < 2 && !(p->have & NOTES_BIO); i++)
+    {
+        if (!who[i] || !who[i][0])
+            continue;
+        notes_file_name(name, sizeof(name), who[i]);
+        snprintf(rel, sizeof(rel), "People/%s", name);
+        if (nw_file_find(rel, strlen(rel), p->bio, &k))
+        {
+            strlcpy(p->person, name, MAX_PATH);
+            p->have |= NOTES_BIO;
+        }
+    }
+    if (album && album[0] && (who[0] && who[0][0] ? who[0] : who[1]))
+    {
+        const char *by = who[0] && who[0][0] ? who[0] : who[1];
+        size_t n;
+
+        notes_file_name(name, sizeof(name), by);
+        n = snprintf(rel, sizeof(rel), "Albums/%s - ", name);
+        notes_file_name(rel + MIN(n, sizeof(rel) - 1), sizeof(rel) - n,
+                        album);
+        if (nw_file_find(rel, strlen(rel), p->album, &k))
+            p->have |= NOTES_ALBUM;
+    }
+}
+
 int notes_find_names(const char *albumartist, const char *artist,
                      const char *album, const char *track,
                      struct notes_pages *p)
@@ -630,9 +765,13 @@ int notes_find_names(const char *albumartist, const char *artist,
     p->bio[0] = p->person[0] = p->album[0] = '\0';
     if (!global_settings.liner_notes)
         return 0;
+    if (notes_scraped())
+        nw_find_files(albumartist, artist, album, p);
 
     /* The album artist's bio, else the track artist's */
-    if ((pg = nw_match(NOTES_PAGE_PERSON, k1, a1))
+    if (p->have & NOTES_BIO)
+        ;
+    else if ((pg = nw_match(NOTES_PAGE_PERSON, k1, a1))
         || (k2 != k1 && (pg = nw_match(NOTES_PAGE_PERSON, k2, a2))))
     {
         strlcpy(p->bio, notes_page_path(pg), MAX_PATH);
@@ -641,7 +780,7 @@ int notes_find_names(const char *albumartist, const char *artist,
     }
 
     /* As /Artwork/Covers is matched: artist and album, else the album */
-    if (album && album[0]
+    if (!(p->have & NOTES_ALBUM) && album && album[0]
         && ((pg = nw_match(NOTES_PAGE_ALBUM, art_name_work_hash(by, album), 0))
             || (pg = nw_match(NOTES_PAGE_ALBUM, art_name_hash(album), 0))))
     {
@@ -707,11 +846,19 @@ int notes_find_album(const struct notes_album *a, struct notes_pages *p)
 
 bool notes_has_bio(const char *name)
 {
+    static struct notes_pages p;
     unsigned int key, alt;
     int i, n = notes_page_count();
 
     if (!name)
         return false;
+    if (notes_scraped())
+    {
+        p.have = 0;
+        nw_find_files(name, NULL, NULL, &p);
+        if (p.have & NOTES_BIO)
+            return true;
+    }
     key = art_name_hash(name);
     alt = art_name_alt_hash(name);
     for (i = 0; i < n; i++)

@@ -14,6 +14,8 @@
 #include "file.h"           /* MAX_PATH */
 
 #define NOTES_DIR "/Notes"
+/* In /Notes, says a scraper wrote the wiki: notes_scraped() */
+#define NOTES_MARKER ".notes-wiki"
 
 /* A page of the index. Its keys are art_name.h's: */
 #define NOTES_PAGE_PERSON 1     /* /Notes/People, or bio.* beside the music */
@@ -43,6 +45,26 @@ struct notes_page
 int notes_page_count(void);
 const struct notes_page *notes_page_get(int i);
 const char *notes_page_path(const struct notes_page *pg);
+/* A scraper's wiki (NOTES_MARKER in /Notes, as the last boot or walk
+ * found it): /Notes is not walked, and its pages are reached by their
+ * files. */
+bool notes_scraped(void);
+/* `name` as a page's file names it: each of \ / : * ? " < > | made _, and
+ * trailing dots and spaces left off, as the scraper writes it */
+void notes_file_name(char *buf, size_t size, const char *name);
+/* The file page: the page at `len` bytes of `rel`, its place under /Notes
+ * (`People/Steve Gadd`), read as notes_page_get(NOTES_PAGE_FILE) until the
+ * next call. NOTES_PAGE_FILE, or -1 when there is no such file. One file
+ * page at a time; it is no index's, so no walk renumbers it. */
+#define NOTES_PAGE_FILE 0x7ffffff0
+int notes_page_file(const char *rel, size_t len);
+/* The keys the page file at `len` bytes of `rel` would have, into `pg`;
+ * false when there is no such file. In a scraper's wiki the file is taken
+ * to be there, as its links name only pages it wrote: a lookup of a name in
+ * a folder of thousands is a read of every name before it. */
+bool notes_file_keys(const char *rel, size_t len, struct notes_page *pg);
+/* Its path, MAX_PATH bytes, into `path`; false when there is no file */
+bool notes_file_path(const char *rel, size_t len, char *path);
 /* The first page whose key is `key` or after it, the pages being sorted by
  * key: notes_page_count() when there is none */
 int notes_page_first(uint32_t key);

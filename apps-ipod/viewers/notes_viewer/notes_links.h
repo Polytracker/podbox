@@ -59,6 +59,8 @@ bool notes_link_find(const char *name, size_t len, uint32_t artist,
 
 /* Where a labelled link's address goes: `len` bytes of `addr`, a page's
  * location under /Notes (`People/Steve Gadd`) or a page's name. A location
+ * the index does not have but a file does is NOTES_PAGE_FILE, which the
+ * screen makes the file page by the address (notes_page_file()). A location
  * with no page goes where its last part would as a name, so a page the
  * notes no longer have still reaches the library. False for plain text. */
 bool notes_link_at(const char *addr, size_t len, uint32_t artist, int album,

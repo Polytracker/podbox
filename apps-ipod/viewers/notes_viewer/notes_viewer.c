@@ -157,11 +157,12 @@ struct nv_link
     struct notes_target t;
 };
 
-/* A page left, to go back to */
+/* A page left, to go back to: a file page by its address too */
 struct nv_hist
 {
     struct notes_target t;
     int scroll, cur;
+    char file[NV_NAME_MAX];
 };
 
 /* How a page is asked for: by where a link goes, or from outside the screen
@@ -181,6 +182,7 @@ struct nv_req
     const struct notes_album *album;    /* its names and a track's path */
     const char *name;
     int focus;                  /* -1, NV_FOCUS_TRACK, or an entry */
+    const char *file;           /* a file page's address, else NULL */
 };
 
 static struct
@@ -226,6 +228,7 @@ static struct
 
     /* the page */
     struct notes_target t;      /* how it was reached */
+    char file[NV_NAME_MAX];     /* a file page's address, else "" */
     struct notes_doc doc;       /* what it is about */
     unsigned char *text;
     size_t text_len;
@@ -251,6 +254,7 @@ static struct
     /* the page's album's other pages, its own first, and their names */
     struct notes_target pages[NV_PAGES_MAX];
     char page_names[NV_PAGES_MAX][64];
+    char page_files[NV_PAGES_MAX][NV_NAME_MAX];     /* file pages' */
     int npages;
 
     /* an album to play once the screen has let go of the buffer */
@@ -2141,8 +2145,58 @@ static bool nv_album_target(const struct notes_album *a, struct notes_target *t,
  * with no page of their own unlinked and {{mentions}} empty; past about
  * 10,000 albums the albums do not fit either, and nothing in the library
  * links. */
+/* A scraper's album pages beside the file page the page is, as their
+ * names give them -- "Artist - Album - Credits" -- onto nv.pages */
+static void nv_file_parts(void)
+{
+    static const char *const parts[] = { "Credits", "Tracks", "Tracks 1",
+                                          "Tracks 2", "Tracks 3",
+                                          "Other Appearances" };
+    const struct notes_page *own = notes_page_get(nv.doc.page);
+    char stem[NV_NAME_MAX], title[64], path[MAX_PATH];
+    const char *rel, *dot, *s, *dash = NULL;
+    struct notes_page k;
+    size_t len;
+    unsigned i;
+
+    if (nv.doc.page != NOTES_PAGE_FILE || !own
+        || own->kind != NOTES_PAGE_ALBUM || nv.doc.album < 0)
+        return;
+    rel = notes_page_path(own) + sizeof(NOTES_DIR);
+    if (!(dot = strrchr(rel, '.')))
+        return;
+    for (s = rel; nv.doc.part && (s = strstr(s, " - ")) && s < dot; s++)
+        dash = s;
+    len = (dash ? dash : dot) - rel;
+    if (len + 3 >= sizeof(stem))
+        return;
+    notes_album_title(nv.doc.album, title, sizeof(title));
+    for (i = 0; i < ARRAYLEN(parts) && nv.npages < NV_PAGES_MAX; i++)
+    {
+        struct notes_target *t = &nv.pages[nv.npages];
+
+        snprintf(stem, sizeof(stem), "%.*s - %s", (int)len, rel, parts[i]);
+        if (!strncasecmp(stem, rel, dot - rel) && !stem[dot - rel])
+            continue;                   /* the page itself */
+        if (!notes_file_path(stem, strlen(stem), path)
+            || !notes_file_keys(stem, strlen(stem), &k))
+            continue;
+        memset(t, 0, sizeof(*t));
+        t->to = NOTES_TO_PAGE;
+        t->page = NOTES_PAGE_FILE;
+        t->album = t->track = -1;       /* its front matter names it */
+        t->artist_seek = -1;
+        t->key = k.key;
+        strlcpy(nv.page_files[nv.npages], stem, sizeof(nv.page_files[0]));
+        snprintf(nv.page_names[nv.npages], sizeof(nv.page_names[0]),
+                 "%s - %s", title, parts[i]);
+        nv_utf8_cut(nv.page_names[nv.npages++]);
+    }
+}
+
 /* The page's album's pages for its menu: the album's own, unless this is
- * it, then those whose front matter names the album */
+ * it, then those whose front matter names the album, or in a scraper's
+ * wiki whose names do */
 static void nv_album_pages(const struct name_index *ix)
 {
     int parts[NV_PAGES_MAX], i, n;
@@ -2160,6 +2214,7 @@ static void nv_album_pages(const struct name_index *ix)
         t->artist_seek = -1;
         notes_album_title(t->album, nv.page_names[nv.npages],
                           sizeof(nv.page_names[0]));
+        nv.page_files[nv.npages][0] = '\0';
         nv_utf8_cut(nv.page_names[nv.npages++]);
     }
     for (i = 0; i < n; i++)
@@ -2177,8 +2232,10 @@ static void nv_album_pages(const struct name_index *ix)
         t->key = pg->key;
         notes_page_title(pg, nv.page_names[nv.npages],
                          sizeof(nv.page_names[0]));
+        nv.page_files[nv.npages][0] = '\0';
         nv_utf8_cut(nv.page_names[nv.npages++]);
     }
+    nv_file_parts();
 }
 
 /* Which of the page's album's other pages (nv.pages) has a section for the
@@ -2193,12 +2250,22 @@ static int nv_track_part(uint32_t key, long disc, char *buf, size_t size)
     for (i = 0; key && i < nv.npages; i++)
     {
         const struct notes_page *pg;
-        const char *s;
+        const char *s, *file = nv.page_files[i];
         int fd, got, on = 0;
+        char path[MAX_PATH];
 
-        if (nv.pages[i].to != NOTES_TO_PAGE
-            || !(pg = notes_page_get(nv.pages[i].page))
-            || (fd = open(notes_page_path(pg), O_RDONLY)) < 0)
+        if (nv.pages[i].to != NOTES_TO_PAGE)
+            continue;
+        if (nv.pages[i].page == NOTES_PAGE_FILE)
+        {
+            if (!notes_file_path(file, strlen(file), path))
+                continue;
+        }
+        else if ((pg = notes_page_get(nv.pages[i].page)))
+            strlcpy(path, notes_page_path(pg), sizeof(path));
+        else
+            continue;
+        if ((fd = open(path, O_RDONLY)) < 0)
             continue;
         got = read(fd, buf, size - 1);
         close(fd);
@@ -2299,6 +2366,10 @@ static bool nv_build(const struct nv_req *r)
         t = r->t;
         if (r->focus >= 0)
             focus = r->focus;
+        /* a file page, by its address */
+        if (t.page == NOTES_PAGE_FILE
+            && (!r->file || notes_page_file(r->file, strlen(r->file)) < 0))
+            goto none;
     }
     else if (r->by == NV_BY_ALBUM)
     {
@@ -2325,6 +2396,10 @@ static bool nv_build(const struct nv_req *r)
     if (!len)
         goto none;
     nv.t = t;
+    if (t.page == NOTES_PAGE_FILE && r->file != nv.file)
+        strlcpy(nv.file, r->file, sizeof(nv.file));
+    else if (t.page != NOTES_PAGE_FILE)
+        nv.file[0] = '\0';
     nv.doc = doc;
     nv_utf8_cut(nv.doc.title);
     nv.built_commit = commit;
@@ -2369,7 +2444,7 @@ static bool nv_build(const struct nv_req *r)
             && (i = nv_track_part(key, track_disc, file, NV_FILE_MAX)) >= 0)
         {
             struct nv_req sub = { NV_BY_TARGET, nv.pages[i], NULL, NULL,
-                                  focus };
+                                  focus, nv.page_files[i] };
 
             notes_links_end();
             return nv_build(&sub);
@@ -2418,9 +2493,9 @@ static bool nv_open(const struct nv_req *r)
     return true;
 }
 
-static bool nv_open_target(const struct notes_target *t)
+static bool nv_open_target(const struct notes_target *t, const char *file)
 {
-    struct nv_req r = { NV_BY_TARGET, *t, NULL, NULL, -1 };
+    struct nv_req r = { NV_BY_TARGET, *t, NULL, NULL, -1, file };
 
     return nv_open(&r);
 }
@@ -2439,9 +2514,20 @@ static bool nv_stale(void)
 static bool nv_refind(void)
 {
     static char name[NV_NAME_MAX];
-    struct nv_req r = { NV_BY_LINK, { 0 }, NULL, name, -1 };
+    struct nv_req r = { NV_BY_LINK, { 0 }, NULL, name, -1, NULL };
 
     nv.nhist = 0;
+    /* a file page by its address, its album found again */
+    if (nv.file[0])
+    {
+        static char file[NV_NAME_MAX];
+
+        strlcpy(file, nv.file, sizeof(file));
+        r.by = NV_BY_TARGET;
+        r.file = file;
+        return notes_link_at(file, strlen(file), 0, -1, &r.t)
+               && nv_open(&r);
+    }
     strlcpy(name, nv.refind, sizeof(name));
     return name[0] && nv_open(&r);
 }
@@ -2472,15 +2558,58 @@ static void nv_push(const struct nv_hist *h)
     nv.hist[nv.nhist++] = *h;
 }
 
-/* Following a link: the page left goes on the history */
-static void nv_follow(const struct notes_target *t)
+/* The page left, as the history keeps it */
+static void nv_left(struct nv_hist *h)
 {
-    struct nv_hist h = { nv.t, nv.scroll, nv.cur };
+    h->t = nv.t;
+    h->scroll = nv.scroll;
+    h->cur = nv.cur;
+    strlcpy(h->file, nv.file, sizeof(h->file));
+}
 
-    if (!nv_open_target(t))
+/* Following a link, a file page's by its `file`: the page left goes on the
+ * history */
+static void nv_follow(const struct notes_target *t, const char *file)
+{
+    static struct nv_hist h;
+
+    nv_left(&h);
+    if (!nv_open_target(t, file))
         return;
     nv_push(&h);
     nv_draw();
+}
+
+/* The address a labelled link `k` holds, into `buf`; "" for none */
+static void nv_link_file(int k, char *buf, size_t size)
+{
+    const unsigned char *s = nv.text + nv.links[k].off;
+    const unsigned char *end = nv.text + nv.links[k].end;
+    size_t n = 0;
+    bool in = false;
+
+    for (; s + 2 < end; s++)
+    {
+        if (s[0] == 0xee && s[1] == 0x80)
+        {
+            if (s[2] == TL_ADDRESS)
+                in = true;
+            else if (in)
+                break;
+            s += 2;
+        }
+        else if (in && n + 1 < size)
+        {
+            if (s[0] == 0xc2 && s[1] == 0xa0)
+            {
+                buf[n++] = ' ';
+                s++;
+            }
+            else
+                buf[n++] = *s;
+        }
+    }
+    buf[n] = '\0';
 }
 
 static int nv_section_line(uint32_t key)
@@ -2504,11 +2633,12 @@ static int nv_section_line(uint32_t key)
  * line */
 static void nv_to_section(uint32_t key)
 {
-    struct nv_hist h = { nv.t, nv.scroll, nv.cur };
+    static struct nv_hist h;
     int i = nv_section_line(key);
 
     if (i < 0)
         return;
+    nv_left(&h);
     nv_push(&h);
     nv_scroll_to(i);
     nv.cur = nv_natural(false);
@@ -2524,18 +2654,19 @@ static bool nv_same_page(const struct notes_target *a,
 
     return ta == tb && a->page == b->page && a->album == b->album
            && a->artist_seek == b->artist_seek
-           && (ta != NOTES_TO_NAME || a->key == b->key);
+           && ((ta != NOTES_TO_NAME && a->page != NOTES_PAGE_FILE)
+               || a->key == b->key);
 }
 
 /* Back to the page before, where it was left; false when there is none */
 static bool nv_back(void)
 {
-    struct nv_hist h;
+    static struct nv_hist h;
 
     if (!nv.nhist)
         return false;
     h = nv.hist[--nv.nhist];
-    if (nv_open_target(&h.t))
+    if (nv_open_target(&h.t, h.file))
     {
         nv.scroll = h.scroll;
         nv_clamp_scroll();
@@ -2689,7 +2820,7 @@ static bool nv_reopen(void)
     int scroll = nv.scroll, cur = nv.cur;
 
     nv.slot.valid = false;
-    if (nv_stale() ? !nv_refind() : !nv_open_target(&nv.t))
+    if (nv_stale() ? !nv_refind() : !nv_open_target(&nv.t, nv.file))
         return false;
     nv.scroll = scroll;
     nv_clamp_scroll();
@@ -2783,9 +2914,11 @@ static int nv_menu_run(bool page)
             break;
         case NV_DO_PAGE:
         {
+            static char file[NV_NAME_MAX];
             struct notes_target to = nv.pages[nv_do_page];
 
-            nv_follow(&to);
+            strlcpy(file, nv.page_files[nv_do_page], sizeof(file));
+            nv_follow(&to, file);
             break;
         }
         case NV_DO_BANNER:
@@ -2825,7 +2958,12 @@ static int nv_select(void)
         nv.play_track = t->track;
         return GO_TO_WPS;
     }
-    nv_follow(t);
+    {
+        static char file[NV_NAME_MAX];
+
+        nv_link_file(nv.cur, file, sizeof(file));
+        nv_follow(t, file);
+    }
     return -1;
 }
 
@@ -2991,8 +3129,9 @@ static int nv_run(const struct nv_req *r)
   done:
     if (shown)
     {
-        struct nv_hist h = { nv.t, nv.scroll, nv.cur };
+        static struct nv_hist h;
 
+        nv_left(&h);
         nv_push(&h);
     }
     viewportmanager_theme_undo(SCREEN_MAIN, false);
@@ -3005,7 +3144,8 @@ int notes_viewer(void)
 {
     static struct notes_album a;
     struct mp3entry *id3 = audio_current_track();
-    struct nv_req r = { NV_BY_ALBUM, { 0 }, &a, NULL, NV_FOCUS_TRACK };
+    struct nv_req r = { NV_BY_ALBUM, { 0 }, &a, NULL, NV_FOCUS_TRACK,
+                        NULL };
 
     if (!id3 || !id3->path[0])
         return GO_TO_PREVIOUS;
@@ -3020,14 +3160,14 @@ int notes_viewer(void)
 
 int notes_album(const struct notes_album *a)
 {
-    struct nv_req r = { NV_BY_ALBUM, { 0 }, a, NULL, -1 };
+    struct nv_req r = { NV_BY_ALBUM, { 0 }, a, NULL, -1, NULL };
 
     return nv_run(&r);
 }
 
 int notes_person(const char *name)
 {
-    struct nv_req r = { NV_BY_NAME, { 0 }, NULL, name, -1 };
+    struct nv_req r = { NV_BY_NAME, { 0 }, NULL, name, -1, NULL };
 
     return name && name[0] ? nv_run(&r) : GO_TO_PREVIOUS;
 }

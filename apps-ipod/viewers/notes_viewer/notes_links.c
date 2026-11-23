@@ -201,9 +201,9 @@ static int nl_album_work(uint32_t key)
     return -1;
 }
 
-int notes_page_album(int page)
+/* The library album the album page with keys `pg` is about, or -1 */
+static int nl_album_of(const struct notes_page *pg)
 {
-    const struct notes_page *pg = notes_page_get(page);
     struct tagcache_album row;
     int i;
 
@@ -219,6 +219,11 @@ int notes_page_album(int page)
     }
     i = nl_album_work(pg->key);
     return i >= 0 || pg->by ? i : nl_album_titled(pg->part, 0);
+}
+
+int notes_page_album(int page)
+{
+    return nl_album_of(notes_page_get(page));
 }
 
 bool notes_album_title(int album, char *buf, size_t size)
@@ -615,6 +620,7 @@ bool notes_link_at(const char *addr, size_t len, uint32_t artist, int album,
                    struct notes_target *t)
 {
     const char *leaf = addr + len;
+    struct notes_page k;
     int page;
 
     while (leaf > addr && leaf[-1] != '/')
@@ -623,6 +629,20 @@ bool notes_link_at(const char *addr, size_t len, uint32_t artist, int album,
         && nl_found_page(page, t))
     {
         t->key = art_name_hash_n(leaf, addr + len - leaf);
+        return true;
+    }
+    /* Not in the index, a scraper's wiki's never is: the file itself, a
+     * file page, which the screen opens by the address */
+    if (leaf > addr && notes_file_keys(addr, len, &k))
+    {
+        memset(t, 0, sizeof(*t));
+        t->to = NOTES_TO_PAGE;
+        t->page = NOTES_PAGE_FILE;
+        t->track = -1;
+        t->key = k.key;
+        t->album = nl_album_of(&k);
+        t->artist_seek = k.kind == NOTES_PAGE_PERSON
+                         ? notes_artist_seek(k.key, k.alt, k.part, NULL) : -1;
         return true;
     }
     return notes_link_find(leaf, addr + len - leaf, artist, album, t);

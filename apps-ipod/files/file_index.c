@@ -246,8 +246,12 @@ static void fi_walk(int depth)
             /* /Artwork holds the art cache's pictures, as cover.* does,
              * and /Notes the bios and liner notes, which are no books --
              * while Liner Notes and Biographies is on to read them, and
-             * walked then for the notes table alone */
-            if (depth == 0 && !strcasecmp((char *)entry->d_name, "Artwork"))
+             * walked then for the notes table alone; a scraper's /Notes
+             * not at all, its pages being reached by their files */
+            if (depth == 0 && (!strcasecmp((char *)entry->d_name, "Artwork")
+                               || (notes_scraped()
+                                   && !strcasecmp((char *)entry->d_name,
+                                                  "Notes"))))
             {
                 /* not walked */
             }
