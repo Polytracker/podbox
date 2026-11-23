@@ -85,6 +85,23 @@ Four words in brackets say what kind of thing you mean instead:
 | `[Peg (track)]` | A track: on the page's own album first, then the artist's, then any. `[Steely Dan - Peg (track)]` names the artist |
 | `[Recording (section)]` | A heading of this page. Left comes back. A heading the page doesn't have leaves the name plain text |
 
+A link can show other words than the name it finds, and go straight to one
+page: put the page's place in `/Notes` after it, in round brackets,
+without the `.md`:
+
+```markdown
+[Gadd](People/Steve Gadd) played on [the title track](Albums/Steely Dan - Aja)
+```
+
+Only the words in square brackets show. The page is the one at that place,
+whatever its name looks like, so of two people called John Smith,
+`[John Smith](People/John Smith (producer))` is always the producer. Write
+the place inside `<>` -- `(<People/Steve Gadd>)` -- and other Markdown
+readers open it too; `%20` for a space works as well. A place with no page
+goes where its last part would as a `[Name]`, so a page you have taken out
+still reaches the library. An address of the web, `(https://...)`, is not a
+link on the player: its words show as plain text.
+
 A track has no page of its own: its link opens its album's page at its
 section of the notes, or at its row in the track list. Notes with sections
 for some tracks have no track list, so a link to a track without a section
@@ -303,6 +320,7 @@ picture of your own is shown as it is, and can't be moved.
 | `## 2. Aja` | In album notes, a heading named for a track starts that track's section |
 | `*text*` | Dimmer text, for dates, credits and asides |
 | `**text**` | Bold, when the theme has a bold font; ordinary text when it has none |
+| `<small>text</small>` | Smaller, when the theme has a small font (Scrim's is 14 pixels): for sources, dates and other lesser lines. It ends at the line's end |
 | `> A line` | A pull line, set apart with a line of the accent colour down its side |
 | `[Steve Gadd]` | A link |
 | `- item` | A bullet, the item's lines indented beside it. `*` and `+` work too; two spaces in front put it a level in |

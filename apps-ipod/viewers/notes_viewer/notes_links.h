@@ -55,6 +55,13 @@ void notes_breathe(void);
 bool notes_link_find(const char *name, size_t len, uint32_t artist,
                      int album, struct notes_target *t);
 
+/* Where a labelled link's address goes: `len` bytes of `addr`, a page's
+ * location under /Notes (`People/Steve Gadd`) or a page's name. A location
+ * with no page goes where its last part would as a name, so a page the
+ * notes no longer have still reaches the library. False for plain text. */
+bool notes_link_at(const char *addr, size_t len, uint32_t artist, int album,
+                   struct notes_target *t);
+
 /* The library album `len` bytes of `name` give, "Artist - Title" or a
  * title alone: of a title, `artist`'s (a name key, or 0) else the oldest.
  * -1 for none. */

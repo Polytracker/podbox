@@ -1021,6 +1021,10 @@ emphasis. Unset means the regular font is used for both.
 The font for a Liner Notes page's name, set over its banner. Unset, the page
 takes the tallest text font the theme has loaded.
 
+[font small]
+The font for a Liner Notes page's small text: the lines a page marks
+<small>, such as its sources. Unset, small text is set in the regular font.
+
 [backdrop]
 An image drawn behind everything. Loading a theme replaces it, and a theme that
 names none clears it rather than keeping the last one.

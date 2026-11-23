@@ -12,9 +12,11 @@
 /* The most one input byte can make the filter emit: a held `[name]` with
  * its two marks, and the word held after its `:`, replayed. flt_pull() feeds
  * a byte only with this much room. */
-#define FLT_ROOM   448
+#define FLT_ROOM   480
 #define MD_NAME_MAX 192
 #define MD_DEF_MAX  16
+#define MD_ADDR_MAX 128             /* a name's (address); its spaces are
+                                     * emitted as two bytes each */
 #define MD_FM_KEY   32              /* the longest key front matter has */
 
 /* ===================== shared filter scaffolding ====================== */
@@ -32,6 +34,7 @@ struct flt_st {
     /* markdown */
     int at_bol, fence, info, tick, link, esc;
     int code, hashes, heading, quote, dim, bold, stars, unders, bang, image;
+    int small;                      /* inside <small> */
     uint8_t prev;                   /* the last byte emitted, 0 at the start */
     size_t nlen;
     uint8_t name[MD_NAME_MAX];      /* a [label] until what follows it shows
@@ -39,8 +42,13 @@ struct flt_st {
     size_t dlen;
     uint8_t def[MD_DEF_MAX];        /* what follows `[label]:` until its first
                                      * word shows whether it is a link */
+    size_t alen;
+    int adepth, aover;              /* brackets open inside it; too long */
+    uint8_t addr[MD_ADDR_MAX];      /* a name's `(address)`, until its `)`
+                                     * shows a page's location or the web */
     int skip;                       /* MD_SKIP_*: inside what is left out */
-    int opened;                     /* bytes of "<!--" held */
+    int opened;                     /* bytes held of a tag md_tags has */
+    uint8_t held[8];
     int dashes;                     /* '-'s just seen, in a comment */
     int eat_nl;                     /* a comment that was its line's all */
     int front, front_done;          /* '-'s opening the file, and whether
@@ -149,7 +157,7 @@ static void plain_feed(flt_st *s, uint8_t c)
  * dropped to its words, and code passes through as it is. Lines are kept as
  * written: a paragraph is a line. */
 enum { LK_NONE = 0, LK_IN_LABEL, LK_AFTER_BRACKET, LK_IN_TARGET, LK_SKIP_LINE,
-       LK_AFTER_COLON };
+       LK_AFTER_COLON, LK_IN_ADDR };
 
 static void md_emit(flt_st *s, uint8_t c)
 {
@@ -280,6 +288,64 @@ static void md_label_alone(flt_st *s)
         md_label(s, 0, s->image ? MD_WORDS : MD_BRACKETED);
 }
 
+/* Whether a held `(address)` is the web's -- a scheme, `www.`, or a `#`
+ * anchor -- rather than a page's location under /Notes */
+static int md_addr_is_web(const uint8_t *a, size_t n)
+{
+    size_t i;
+
+    if (!n || a[0] == '#' || (n >= 4 && !strncasecmp((const char *)a,
+                                                      "www.", 4)))
+        return 1;
+    for (i = 0; i < n && a[i] != '/'; i++)
+        if (a[i] == ':')
+            return 1;
+    return 0;
+}
+
+/* The held `[label](address)`: a page's location makes the label a name
+ * whose hidden part is TS_ADDRESS and the location, its spaces (and
+ * `%20`s) no-break spaces; a web address leaves the label as words */
+static void md_addressed(flt_st *s)
+{
+    const uint8_t *a = s->addr;
+    size_t n = s->alen, i;
+
+    while (n && (*a == ' ' || *a == '<'))
+        a++, n--;
+    while (n && (a[n - 1] == ' ' || a[n - 1] == '>'))
+        n--;
+    if (s->aover || !n || md_addr_is_web(a, n))
+    {
+        md_label(s, 0, MD_WORDS);
+        return;
+    }
+    ts_emit_cp(&s->out, TS_NAME_OPEN);
+    for (i = 0; i < s->nlen; i++)
+        if (s->name[i] != '*' && s->name[i] != '_' && s->name[i] != '`')
+            md_emit(s, s->name[i]);
+    ts_emit_cp(&s->out, TS_HIDE_OPEN);
+    ts_emit_cp(&s->out, TS_ADDRESS);
+    for (i = 0; i < n; i++)
+    {
+        if (a[i] == ' ' || (a[i] == '%' && i + 2 < n && a[i + 1] == '2'
+                            && a[i + 2] == '0'))
+        {
+            md_emit(s, 0xc2);           /* U+00A0 */
+            md_emit(s, 0xa0);
+            if (a[i] == '%')
+                i += 2;
+        }
+        else
+            md_emit(s, a[i]);
+    }
+    ts_emit_cp(&s->out, TS_HIDE_CLOSE);
+    ts_emit_cp(&s->out, TS_NAME_CLOSE);
+    s->nlen = 0;
+    s->image = 0;
+    s->link = LK_NONE;
+}
+
 /* Whether the word after `[label]:` is a link's address, which makes the
  * line a reference definition */
 static int md_def_is_link(const flt_st *s)
@@ -371,7 +437,31 @@ static int md_item_more(flt_st *s, uint8_t c)
 /* What md_take() is leaving out */
 enum { MD_SKIP_NONE = 0, MD_SKIP_COMMENT, MD_SKIP_FRONT };
 
-static const uint8_t md_open[] = "<!--";
+/* What md_take() holds a `<` for: a comment's start, and small text */
+static const char *const md_tags[] = { "<!--", "<small>", "</small>" };
+enum { MD_TAG_COMMENT, MD_TAG_SMALL, MD_TAG_SMALL_END };
+
+/* Whether the `n` bytes held start one of md_tags, any capitals; the one
+ * they are the whole of in *whole, else -1 */
+static int md_tag_start(const uint8_t *h, int n, int *whole)
+{
+    unsigned i;
+    int any = 0;
+
+    *whole = -1;
+    for (i = 0; i < sizeof(md_tags) / sizeof(md_tags[0]); i++)
+    {
+        int len = strlen(md_tags[i]);
+
+        if (n <= len && !strncasecmp((const char *)h, md_tags[i], n))
+        {
+            any = 1;
+            if (n == len)
+                *whole = i;
+        }
+    }
+    return any;
+}
 
 /* The bytes md_take() held, let go: they were not what it held them for */
 static void md_let_go(flt_st *s)
@@ -380,7 +470,7 @@ static void md_let_go(flt_st *s)
 
     s->opened = 0;
     for (i = 0; i < n; i++)
-        md_feed(s, md_open[i]);
+        md_feed(s, s->held[i]);
 }
 
 /* A front matter line: at its start, inside its key, or YAML -- blank,
@@ -512,16 +602,38 @@ static void md_take(flt_st *s, uint8_t c)
         if (c == '\n')
             return;
     }
-    if (s->opened && c != md_open[s->opened])
-        md_let_go(s);
-    if (!md_in_code(s) && s->link != LK_IN_LABEL && c == md_open[s->opened])
+    if (s->opened)
     {
-        if (++s->opened < 4)
+        int whole;
+
+        s->held[s->opened] = c;
+        if (md_tag_start(s->held, s->opened + 1, &whole))
+        {
+            s->opened++;
+            if (whole < 0)
+                return;
+            s->opened = 0;
+            if (whole == MD_TAG_COMMENT)
+            {
+                s->skip = MD_SKIP_COMMENT;
+                s->dashes = 0;
+                s->eat_nl = s->at_bol && !s->hashes && !s->quote;
+            }
+            else if (s->small != (whole == MD_TAG_SMALL))
+            {
+                s->small = whole == MD_TAG_SMALL;
+                ts_emit_cp(&s->out, s->small ? TS_SMALL_OPEN
+                                             : TS_SMALL_CLOSE);
+            }
             return;
-        s->opened = 0;
-        s->skip = MD_SKIP_COMMENT;
-        s->dashes = 0;
-        s->eat_nl = s->at_bol && !s->hashes && !s->quote;
+        }
+        md_let_go(s);
+    }
+    if (!md_in_code(s) && s->link != LK_IN_LABEL
+        && s->link != LK_IN_ADDR && c == '<')
+    {
+        s->held[0] = c;
+        s->opened = 1;
         return;
     }
     md_feed(s, c);
@@ -576,6 +688,24 @@ static void md_feed(flt_st *s, uint8_t c)
         md_label(s, 0, MD_OPENED);              /* too long for a name */
     }
 
+    /* A name's `(address)` is held to the `)` that closes it, brackets
+     * inside it its own: `(People/John Smith (a1b2c3d4))` */
+    if (s->link == LK_IN_ADDR) {
+        if (c == '\n') {
+            md_label(s, 0, MD_WORDS);
+        } else if (c == ')' && !s->adepth) {
+            md_addressed(s);
+            return;
+        } else {
+            s->adepth += c == '(' ? 1 : c == ')' ? -1 : 0;
+            if (s->alen < MD_ADDR_MAX)
+                s->addr[s->alen++] = c;
+            else
+                s->aover = 1;
+            return;
+        }
+    }
+
     /* `[label]:` at a line's start is a reference definition only when an
      * address follows; `[Name]: vocals` is a name and its words. The first
      * word after the colon is held until it shows which. */
@@ -604,6 +734,12 @@ static void md_feed(flt_st *s, uint8_t c)
     }
 
     if (s->link == LK_AFTER_BRACKET) {
+        if (c == '(' && md_is_name(s)) {        /* [label](address) */
+            s->alen = 0;
+            s->adepth = s->aover = 0;
+            s->link = LK_IN_ADDR;
+            return;
+        }
         if (c == '(' || c == '[') {             /* [label](url), [label][ref] */
             md_label(s, 0, MD_WORDS);
             s->link = LK_IN_TARGET;
@@ -680,6 +816,7 @@ static void md_feed(flt_st *s, uint8_t c)
     if (c == '\n') {
         if (s->dim) { ts_emit_cp(&s->out, TS_DIM_CLOSE); s->dim = 0; }
         if (s->bold) { ts_emit_cp(&s->out, TS_BOLD_CLOSE); s->bold = 0; }
+        if (s->small) { ts_emit_cp(&s->out, TS_SMALL_CLOSE); s->small = 0; }
         if (s->heading) { ts_emit_cp(&s->out, TS_HEADING_CLOSE); s->heading = 0; }
         s->hashes = 0;
         s->quote = 0;

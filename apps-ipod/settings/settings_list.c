@@ -1810,6 +1810,8 @@ const struct settings_list settings[] = {
                      "-", FONT_DIR "/", ".fnt"),
     TEXT_SETTING(F_THEMESETTING|F_THEMERESET, heading_font_file,
                      "font heading", "-", FONT_DIR "/", ".fnt"),
+    TEXT_SETTING(F_THEMESETTING|F_THEMERESET, small_font_file,
+                     "font small", "-", FONT_DIR "/", ".fnt"),
     INT_SETTING(0, glyphs_to_cache, LANG_GLYPHS, DEFAULT_GLYPHS,
                 "glyphs", UNIT_INT, MIN_GLYPHS, MAX_GLYPHS, 10,
                 NULL, NULL, NULL),

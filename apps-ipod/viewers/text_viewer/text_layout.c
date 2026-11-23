@@ -6,10 +6,10 @@
  * its pages.
  *
  * Parts, in order:
- *   - widths, with the engine's invisible marks left out and bold text in
- *     the bold font
+ *   - widths, with the engine's invisible marks left out, bold text in the
+ *     bold font and small text in the small one
  *   - breaking a line: at a space, at a soft hyphen, or inside a word too
- *     wide for any line; then its height, which bold can raise
+ *     wide for any line; then its height, from the fonts it draws in
  *   - drawing a line: in one call when it can be, word by word when it holds
  *     marks or is justified
  ****************************************************************************/
@@ -45,26 +45,33 @@ int tl_width(const struct text_layout *tl, unsigned char *s, size_t n)
     return tl_width_in(tl->font, s, n);
 }
 
-/* The font text is set in, bold or not */
-static int tl_font(const struct text_layout *tl, bool bold)
+/* The font text in the style `st` is set in: small text in the small
+ * font, else bold in the bold one */
+static int tl_font(const struct text_layout *tl, int st)
 {
-    return bold && tl->bold >= 0 ? tl->bold : tl->font;
+    if ((st & TL_STYLE_SMALL) && tl->small >= 0)
+        return tl->small;
+    return (st & TL_STYLE_BOLD) && tl->bold >= 0 ? tl->bold : tl->font;
 }
 
-/* Whether the mark at `s`, `h` bytes of it, opens or closes bold, a
- * heading's too under head_bold: the new state, or `bold` as it was */
-static bool tl_bold_after(const struct text_layout *tl, const unsigned char *s,
-                          size_t h, bool bold)
+/* The style after the mark at `s`, `h` bytes of it: bold opened or closed,
+ * a heading's too under head_bold, and small text; else `st` as it was */
+static int tl_style_after(const struct text_layout *tl, const unsigned char *s,
+                          size_t h, int st)
 {
     if (h == 3 && s[0] == 0xee && s[1] == 0x80)
     {
         if (s[2] == TL_BOLD_OPEN || (tl->head_bold && s[2] == 0x82))
-            return true;
+            return st | TL_STYLE_BOLD;
         if (s[2] == TL_BOLD_CLOSE
             || (tl->head_bold && (s[2] == 0x83 || s[2] == TL_MINOR)))
-            return false;
+            return st & ~TL_STYLE_BOLD;
+        if (s[2] == TL_SMALL_OPEN)
+            return st | TL_STYLE_SMALL;
+        if (s[2] == TL_SMALL_CLOSE)
+            return st & ~TL_STYLE_SMALL;
     }
-    return bold;
+    return st;
 }
 
 /* A soft hyphen, U+00AD, is two bytes in UTF-8. It is invisible and takes
@@ -118,7 +125,9 @@ static bool tl_is_item_mark(const unsigned char *s, size_t n)
 
 static bool tl_is_minor_mark(const unsigned char *s, size_t n)
 {
-    return n >= 3 && s[0] == 0xee && s[1] == 0x80 && s[2] == TL_MINOR;
+    return n >= 3 && s[0] == 0xee && s[1] == 0x80
+           && (s[2] == TL_MINOR || s[2] == TL_SMALL_OPEN
+               || s[2] == TL_SMALL_CLOSE);
 }
 
 size_t tl_hidden(const unsigned char *s, size_t n)
@@ -174,7 +183,7 @@ void tl_draw_bullet(const struct tl_line *ln, int x, int y)
 }
 
 int tl_text_width(const struct text_layout *tl, unsigned char *s, size_t n,
-                  bool *bold)
+                  int *st)
 {
     size_t i = 0, start = 0;
     int w = 0;
@@ -185,15 +194,15 @@ int tl_text_width(const struct text_layout *tl, unsigned char *s, size_t n,
 
         if (h)
         {
-            w += tl_width_in(tl_font(tl, *bold), s + start, i - start);
-            *bold = tl_bold_after(tl, s + i, h, *bold);
+            w += tl_width_in(tl_font(tl, *st), s + start, i - start);
+            *st = tl_style_after(tl, s + i, h, *st);
             i += h;
             start = i;
         }
         else
             i++;
     }
-    return w + tl_width_in(tl_font(tl, *bold), s + start, n - start);
+    return w + tl_width_in(tl_font(tl, *st), s + start, n - start);
 }
 
 /* tl_width() cannot be given a constant: it writes past what it measures */
@@ -216,7 +225,7 @@ static void tl_break(const struct text_layout *tl, unsigned char *s,
 {
     size_t i = 0;
     int used = 0;
-    bool bold = ln->bold;
+    int st = tl_line_style(ln);
 
     if (avail == 0)
         return;
@@ -230,13 +239,13 @@ static void tl_break(const struct text_layout *tl, unsigned char *s,
     while (i < avail)
     {
         size_t word_end = i;
-        bool word_bold = bold;
+        int word_st = st;
         int word_w;
 
         while (word_end < avail && s[word_end] != ' ' && s[word_end] != '\n')
             word_end++;
 
-        word_w = tl_text_width(tl, s + i, word_end - i, &word_bold);
+        word_w = tl_text_width(tl, s + i, word_end - i, &word_st);
 
         if (used + word_w > width)
         {
@@ -248,14 +257,14 @@ static void tl_break(const struct text_layout *tl, unsigned char *s,
              * all */
             for (p = word_end; p-- > i; )
             {
-                bool part_bold = bold;
+                int part_st = st;
                 int part_w, dash_w;
 
                 if (!tl_is_shy(s + p, word_end - p))
                     continue;
-                part_w = tl_text_width(tl, s + i, p - i, &part_bold);
+                part_w = tl_text_width(tl, s + i, p - i, &part_st);
                 font_getstringsize((const unsigned char *)"-", &dash_w, NULL,
-                                   tl_font(tl, part_bold));
+                                   tl_font(tl, part_st));
                 if (used + part_w + dash_w <= width)
                 {
                     ln->draw = p;
@@ -281,7 +290,7 @@ static void tl_break(const struct text_layout *tl, unsigned char *s,
                     while (k < word_end && (s[k] & 0xc0) == 0x80)
                         k++;                 /* to the next codepoint start */
 
-                    cw = tl_text_width(tl, s + j, k - j, &bold);
+                    cw = tl_text_width(tl, s + j, k - j, &st);
                     if (w + cw > width && j > 0)
                         break;
                     w += cw;
@@ -295,7 +304,7 @@ static void tl_break(const struct text_layout *tl, unsigned char *s,
         }
 
         used += word_w;
-        bold = word_bold;
+        st = word_st;
         i = word_end;
         ln->width = used;
 
@@ -310,7 +319,7 @@ static void tl_break(const struct text_layout *tl, unsigned char *s,
         }
 
         /* s[i] is a space: it only stays if a word follows it on this line */
-        used += tl_width(tl, s + i, 1);
+        used += tl_width_in(tl_font(tl, st), s + i, 1);
         i++;
     }
 
@@ -322,9 +331,8 @@ static void tl_break(const struct text_layout *tl, unsigned char *s,
 void tl_line_break(const struct text_layout *tl, unsigned char *s,
                    size_t avail, int width, struct tl_line *ln)
 {
-    struct font *f = font_get(tl->font);
-    bool any = ln->bold;
-    size_t i;
+    int st = tl_line_style(ln), fonts[3], nfonts = 0, below = 0, k;
+    size_t i, h;
 
     ln->used = ln->draw = 0;
     ln->width = ln->indent = 0;
@@ -332,20 +340,35 @@ void tl_line_break(const struct text_layout *tl, unsigned char *s,
     tl_break(tl, s, avail, width, ln);
 
     /* As tall as the tallest font the line draws in, on the lowest baseline
-     * of the two, so they share it */
-    for (i = 0; i < ln->draw && !any; i++)
-        any = tl_bold_after(tl, s + i, tl_hidden(s + i, ln->draw - i),
-                            false);
-    ln->height = f->height;
-    ln->ascent = f->ascent;
-    if (any && tl->bold >= 0)
+     * of them, so they share it; a line of nothing but small text is a small
+     * line, an empty one the text's */
+    for (i = 0; i < ln->draw; i += h ? h : 1)
     {
-        struct font *b = font_get(tl->bold);
-        int below = MAX(f->height - f->ascent, b->height - b->ascent);
+        int f;
 
-        ln->ascent = MAX(f->ascent, b->ascent);
-        ln->height = ln->ascent + below;
+        h = tl_hidden(s + i, ln->draw - i);
+        if (h)
+        {
+            st = tl_style_after(tl, s + i, h, st);
+            continue;
+        }
+        f = tl_font(tl, st);
+        for (k = 0; k < nfonts && fonts[k] != f; k++)
+            ;
+        if (k == nfonts && nfonts < 3)
+            fonts[nfonts++] = f;
     }
+    if (!nfonts)
+        fonts[nfonts++] = tl->font;
+    ln->ascent = 0;
+    for (k = 0; k < nfonts; k++)
+    {
+        struct font *f = font_get(fonts[k]);
+
+        ln->ascent = MAX(ln->ascent, f->ascent);
+        below = MAX(below, f->height - f->ascent);
+    }
+    ln->height = ln->ascent + below;
 }
 
 /* ---- drawing a line ---------------------------------------------------- */
@@ -353,10 +376,10 @@ void tl_line_break(const struct text_layout *tl, unsigned char *s,
 /* Draws `n` bytes of one word at x, what is hidden left out, on the
  * baseline `base`; returns the x after it. A dim or a name's mark changes the
  * colour of what follows, `*fg` carrying it between words and set before each
- * run is drawn, and a bold mark the font, `*bold` carrying it alike. `*dim`
+ * run is drawn, and a bold or small mark the font, `*st` carrying it alike. `*dim`
  * says whether the text is dim, which a name's end goes back to. */
 static int tl_put_word(const struct text_layout *tl, unsigned char *s,
-                       size_t n, int x, int base, bool *bold, bool *dim,
+                       size_t n, int x, int base, int *st, bool *dim,
                        unsigned *fg)
 {
     size_t i = 0, start = 0;
@@ -367,7 +390,7 @@ static int tl_put_word(const struct text_layout *tl, unsigned char *s,
 
         if (i == n || h)
         {
-            int font = tl_font(tl, *bold);
+            int font = tl_font(tl, *st);
             unsigned char save = s[i];
 
             s[i] = '\0';
@@ -387,7 +410,7 @@ static int tl_put_word(const struct text_layout *tl, unsigned char *s,
                 *fg = s + i == tl->current ? tl->link_on : tl->link;
             else if (h == 3 && tl->links && s[i + 2] == TL_NAME_CLOSE)
                 *fg = *dim ? tl->dim : tl->fg;
-            *bold = tl_bold_after(tl, s + i, h, *bold);
+            *st = tl_style_after(tl, s + i, h, *st);
             i += h ? h : 1;
             start = i;
         }
@@ -404,7 +427,8 @@ void tl_draw_line(const struct text_layout *tl, unsigned char *s,
                   const struct tl_line *ln, int y)
 {
     bool justify = tl->justify && ln->full;
-    bool hidden = false, bold = ln->bold, dim = tl->links && ln->dim;
+    bool hidden = false, dim = tl->links && ln->dim;
+    int st = tl_line_style(ln);
     unsigned fg = screens[SCREEN_MAIN].get_foreground();
     int gaps = 0, gap = 0, extra = 0, space_w, x = ln->indent;
     int base = y + ln->ascent;
@@ -418,7 +442,7 @@ void tl_draw_line(const struct text_layout *tl, unsigned char *s,
             hidden = true;
     }
 
-    if (!hidden && !ln->hyphen && !bold && (!justify || gaps == 0))
+    if (!hidden && !ln->hyphen && !st && (!justify || gaps == 0))
     {
         unsigned char save = s[ln->draw];
 
@@ -428,7 +452,6 @@ void tl_draw_line(const struct text_layout *tl, unsigned char *s,
         return;
     }
 
-    space_w = tl_literal_width(tl, " ");
     if (justify)
         extra = tl->width - ln->indent - ln->width;
 
@@ -439,6 +462,8 @@ void tl_draw_line(const struct text_layout *tl, unsigned char *s,
 
         if (s[i] == ' ')
         {
+            font_getstringsize((const unsigned char *)" ", &space_w, NULL,
+                               tl_font(tl, st));
             x += space_w;
             if (justify)
                 x += extra * (gap + 1) / gaps - extra * gap / gaps;
@@ -448,14 +473,14 @@ void tl_draw_line(const struct text_layout *tl, unsigned char *s,
         }
         while (j < ln->draw && s[j] != ' ')
             j++;
-        x = tl_put_word(tl, s + i, j - i, x, base, &bold, &dim, &fg);
+        x = tl_put_word(tl, s + i, j - i, x, base, &st, &dim, &fg);
         i = j;
     }
     /* A dim mark's colour stays set for the next line */
     screens[SCREEN_MAIN].set_foreground(fg);
     if (ln->hyphen)
         screens[SCREEN_MAIN].putsxy(x, base
-                                    - font_get(tl_font(tl, bold))->ascent,
+                                    - font_get(tl_font(tl, st))->ascent,
                                     (unsigned char *)"-");
     screens[SCREEN_MAIN].setfont(tl->font);
 }

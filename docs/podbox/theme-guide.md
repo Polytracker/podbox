@@ -54,7 +54,7 @@ The reset covers 74 settings:
 
 | Group | Settings |
 |---|---|
-| The skins and fonts | `wps`, `sbs`, `font`, `font bold`, `font heading` |
+| The skins and fonts | `wps`, `sbs`, `font`, `font bold`, `font heading`, `font small` |
 | Colours | `foreground color`, `background color`, the three `line selector …` colours, `list separator color` |
 | Chrome | `statusbar`, `scrollbar`, `scrollbar width`, `selector type`, `list separator height`, `show icons`, `volume display`, `battery display`, `ui viewport` |
 | Icons and files | `iconset`, `viewers iconset`, `filetype colours` |
@@ -151,6 +151,10 @@ bold face.
 pixels. Unset, the page takes the tallest font your skins load that sets text,
 which can be the wrong one; name it if your skins load a large display or
 numeral font.
+
+`font small` is the font for the small text of a Liner Notes page, the lines
+its writer marks `<small>`: sources, track numbers and the like. Unset, they
+are set in `font`.
 
 ---
 

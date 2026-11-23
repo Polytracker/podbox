@@ -604,6 +604,23 @@ bool notes_link_find(const char *name, size_t len, uint32_t artist,
     return false;
 }
 
+bool notes_link_at(const char *addr, size_t len, uint32_t artist, int album,
+                   struct notes_target *t)
+{
+    const char *leaf = addr + len;
+    int page;
+
+    while (leaf > addr && leaf[-1] != '/')
+        leaf--;
+    if (leaf > addr && (page = notes_page_at(addr, len)) >= 0
+        && nl_found_page(page, t))
+    {
+        t->key = art_name_hash_n(leaf, addr + len - leaf);
+        return true;
+    }
+    return notes_link_find(leaf, addr + len - leaf, artist, album, t);
+}
+
 int notes_album_named(const char *name, size_t len, uint32_t artist)
 {
     const char *dash = notes_dash(name, len);

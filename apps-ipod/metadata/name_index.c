@@ -201,7 +201,8 @@ static void ni_read_file(struct ni_work *w, int file, const char *path)
     bs_io io;
     char head[NI_TEXT_MAX], name[NI_TEXT_MAX];
     int hlen = 0, nlen = 0;
-    bool in_head = false, in_name = false;
+    bool in_head = false, in_name = false, addressed = false;
+    bool in_addr = false;       /* a heading's text leaves addresses out */
     int section = NAME_NONE;
     uint32_t pos = 0, name_at = 0;
     long got;
@@ -247,6 +248,7 @@ static void ni_read_file(struct ni_work *w, int file, const char *path)
                 else if (m == 0x89)             /* a name */
                 {
                     in_name = true;
+                    addressed = false;
                     nlen = 0;
                     name_at = pos;
                 }
@@ -255,9 +257,22 @@ static void ni_read_file(struct ni_work *w, int file, const char *path)
                     section = ni_string(w, head, hlen);
                     in_head = false;
                 }
+                else if (m == 0x92 && in_name)  /* a link's address */
+                {
+                    nlen = 0;           /* names its page, not its label */
+                    addressed = in_addr = true;
+                }
+                else if (m == 0x8e)
+                    in_addr = false;
                 else if (m == 0x8a && in_name)
                 {
-                    uint32_t key = art_name_hash_n(name, nlen);
+                    int lead = nlen;
+                    uint32_t key;
+
+                    while (addressed && lead > 0 && name[lead - 1] != '/')
+                        lead--;
+                    memmove(name, name + lead, nlen -= lead);
+                    key = art_name_hash_n(name, nlen);
 
                     if (key && w->count < NI_MENTIONS_MAX)
                     {
@@ -277,7 +292,7 @@ static void ni_read_file(struct ni_work *w, int file, const char *path)
             }
             if (c == '\n')
                 continue;
-            if (in_head && hlen < NI_TEXT_MAX - 1)
+            if (in_head && !in_addr && hlen < NI_TEXT_MAX - 1)
                 head[hlen++] = c;
             if (in_name && nlen < NI_TEXT_MAX - 1)
                 name[nlen++] = c;

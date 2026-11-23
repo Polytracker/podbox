@@ -178,6 +178,7 @@ static struct
     struct viewport tvp;        /* the text, inside the margins */
     int font, lh, quote_indent;
     int bold;                   /* the theme's bold font, or -1 */
+    int small;                  /* the theme's small font, or -1 */
     int name_font, name_h;      /* the large name's font, and its height */
     unsigned fg, bg, dim, accent, rule, track;
     unsigned head, quote;       /* headings, and a pull line's rule */
@@ -521,6 +522,7 @@ static void nv_setup_screen(void)
     nv.bold = font_get_ui_bold();
     if (nv.bold == nv.font)
         nv.bold = -1;
+    nv.small = font_get_ui_small();
     nv.name_font = nv_name_font();
     nv.name_h = font_get(nv.name_font)->height;
     nv_colours();
@@ -823,6 +825,7 @@ static void nv_layout_init(struct text_layout *tl)
     memset(tl, 0, sizeof(*tl));
     tl->font = nv.font;
     tl->bold = nv.bold;
+    tl->small = nv.small;
     tl->width = nv.tvp.width;
     tl->fg = nv.fg;
     tl->dim = nv.dim;
@@ -842,7 +845,7 @@ static void nv_layout(void)
     uint32_t off = 0;
     int y = 0, item = -1;       /* a list item's indent, while it wraps */
     bool heading = false, quote = false, dim = false, bold = false;
-    bool minor = false;
+    bool minor = false, small = false;
 
     nv.cur = -1;
     nv_layout_init(&tl);
@@ -875,6 +878,7 @@ static void nv_layout(void)
             indent += first;
         }
         l->ln.bold = bold || (heading && !minor && tl.head_bold);
+        l->ln.small = small;
         tl_line_break(&tl, s, avail, nv.tvp.width - indent, &l->ln);
         if (l->ln.used == 0)
             break;
@@ -904,6 +908,9 @@ static void nv_layout(void)
                 else if (s[i + 2] == TL_BOLD_OPEN
                          || s[i + 2] == TL_BOLD_CLOSE)
                     bold = s[i + 2] == TL_BOLD_OPEN;
+                else if (s[i + 2] == TL_SMALL_OPEN
+                         || s[i + 2] == TL_SMALL_CLOSE)
+                    small = s[i + 2] == TL_SMALL_OPEN;
             }
         quote = pull && s[l->ln.used - 1] != '\n';
         if (s[l->ln.used - 1] == '\n')
@@ -998,7 +1005,7 @@ static void nv_unhide_spaces(const size_t *shown, int n)
 
 static bool nv_find_links(void)
 {
-    static char name[NV_NAME_MAX];
+    static char name[NV_NAME_MAX], addr[NV_NAME_MAX];
     static size_t shown[NV_SHOWN_MAX];  /* where qualifiers were unhidden */
     unsigned char *t = nv.text;
     size_t off, i, end = 0;
@@ -1010,7 +1017,10 @@ static bool nv_find_links(void)
         end = nv.lines[nv.nlines - 1].off + nv.lines[nv.nlines - 1].ln.used;
     for (off = 0; off + 3 <= end; off++)
     {
-        size_t n = 0, close;
+        size_t n = 0, close, an = 0;
+        char *into = name;              /* the address, once its mark is */
+        size_t *len = &n;
+        bool found;
         struct nv_link *k = &nv.links[nv.nlinks];
 
         if (t[off] != 0xee || t[off + 1] != 0x80 || t[off + 2] != TL_NAME_OPEN)
@@ -1021,26 +1031,34 @@ static bool nv_find_links(void)
                 break;
         if (close + 3 > nv.text_len)
             break;
-        for (i = off + 3; i < close && n + 1 < sizeof(name); i++)
+        for (i = off + 3; i < close && *len + 1 < NV_NAME_MAX; i++)
         {
             if (t[i] == 0xee && t[i + 1] == 0x80)
             {
+                if (t[i + 2] == TL_ADDRESS)
+                {
+                    into = addr;
+                    len = &an;
+                }
                 i += 2;
                 continue;
             }
             /* a qualifier's no-break spaces are spaces in its name */
             if (t[i] == 0xc2 && t[i + 1] == 0xa0)
             {
-                name[n++] = ' ';
+                into[(*len)++] = ' ';
                 i++;
                 continue;
             }
-            name[n++] = t[i];
+            into[(*len)++] = t[i];
         }
-        if (nv.nlinks < NV_LINKS_MAX
-            && notes_link_find(name, n, nv.doc.artist, nv.doc.album, &k->t)
-            && (k->t.to != NOTES_TO_SECTION
-                || nv_section_line(k->t.key) >= 0))
+        found = nv.nlinks < NV_LINKS_MAX
+                && (an ? notes_link_at(addr, an, nv.doc.artist, nv.doc.album,
+                                       &k->t)
+                       : notes_link_find(name, n, nv.doc.artist, nv.doc.album,
+                                         &k->t));
+        if (found && (k->t.to != NOTES_TO_SECTION
+                      || nv_section_line(k->t.key) >= 0))
         {
             k->off = off;
             k->end = close + 3;
@@ -1049,9 +1067,10 @@ static bool nv_find_links(void)
         else
         {
             /* plain text, and a trailing "(...)" shown with it: it was
-             * not a qualifier that found anything */
+             * not a qualifier that found anything. An address stays
+             * hidden. */
             t[off + 2] = TL_NAME_CLOSE;
-            for (i = off + 3; i + 3 <= close; i++)
+            for (i = off + 3; !an && i + 3 <= close; i++)
                 if (t[i] == 0xee && t[i + 1] == 0x80
                     && (t[i + 2] == TL_HIDE_OPEN || t[i + 2] == TL_HIDE_CLOSE))
                 {
@@ -1206,14 +1225,13 @@ static void nv_draw_current(const struct text_layout *tl, int i, int y)
     struct nv_line *l = &nv.lines[i];
     uint32_t start = i == k->line ? k->off : l->off;
     uint32_t end = i == k->last ? k->end : l->off + l->ln.draw;
-    bool bold = l->ln.bold;
-    int x, w;
+    int st = tl_line_style(&l->ln), x, w;
 
     if (end <= start)
         return;
     x = l->ln.indent + tl_text_width(tl, nv.text + l->off, start - l->off,
-                                     &bold);
-    w = tl_text_width(tl, nv.text + start, end - start, &bold);
+                                     &st);
+    w = tl_text_width(tl, nv.text + start, end - start, &st);
     screens[SCREEN_MAIN].set_foreground(nv.accent);
     screens[SCREEN_MAIN].fillrect(x - 2, y, w + 4, l->ln.height);
 }

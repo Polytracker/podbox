@@ -43,6 +43,10 @@ struct notes_page
 int notes_page_count(void);
 const struct notes_page *notes_page_get(int i);
 const char *notes_page_path(const struct notes_page *pg);
+/* The page at `len` bytes of `rel`, its location under /Notes with or
+ * without its extension (`People/Steve Gadd`), as a labelled link names it;
+ * -1 for none. Capitals do not matter, as on the player's disk. */
+int notes_page_at(const char *rel, size_t len);
 /* Whether `a` is to be read over `b`, a page of the same name (or NULL):
  * one in /Notes over one beside the music, then .md over .txt */
 bool notes_page_better(const struct notes_page *a, const struct notes_page *b);

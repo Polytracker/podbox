@@ -17,6 +17,7 @@ struct text_layout
 {
     int font;           /* font id */
     int bold;           /* bold text's font id, or -1 to set it in `font` */
+    int small;          /* small text's font id, or -1 to set it in `font` */
     int width;          /* the lines' width, pixels */
     bool justify;       /* a full line's leftover shared out between its
                          * spaces */
@@ -43,6 +44,7 @@ struct tl_line
     int indent;     /* pixels before it, set by the caller */
     bool bold;      /* starts inside bold text: set by the caller before the
                      * break, which keeps it */
+    bool small;     /* starts inside small text, alike */
     bool dim;       /* starts inside dim text, which a link ends back in;
                      * read only with tl->links, set by the caller */
     int height;     /* pixels: the tallest font the line draws in */
@@ -65,16 +67,25 @@ struct tl_line
 #define TL_BULLET     0x8f              /* TS_BULLET's */
 #define TL_NUMBERED   0x90
 #define TL_MINOR      0x91              /* TS_HEADING_MINOR's */
+#define TL_ADDRESS    0x92              /* TS_ADDRESS's, inside a hidden part */
+#define TL_SMALL_OPEN  0x93             /* TS_SMALL_OPEN's: never drawn */
+#define TL_SMALL_CLOSE 0x94
+
+/* What text is set in, as a line or a run of it carries it */
+#define TL_STYLE_BOLD  1
+#define TL_STYLE_SMALL 2
+#define tl_line_style(ln) (((ln)->bold ? TL_STYLE_BOLD : 0) \
+                           | ((ln)->small ? TL_STYLE_SMALL : 0))
 
 /* Width of the `n` bytes at `s`, which must have a byte after them that can
  * be written: it is set to NUL while they are measured */
 int tl_width(const struct text_layout *tl, unsigned char *s, size_t n);
 
-/* tl_width() of what is visible in the `n` bytes at `s`, in bold where it
- * is: `*bold` says whether they start in bold and is left saying whether
- * they end so */
+/* tl_width() of what is visible in the `n` bytes at `s`, in bold and small
+ * text where it is: `*st`, TL_STYLE_*, says what they start in and is left
+ * saying what they end in */
 int tl_text_width(const struct text_layout *tl, unsigned char *s, size_t n,
-                  bool *bold);
+                  int *st);
 
 /* Width of a string constant */
 int tl_literal_width(const struct text_layout *tl, const char *s);

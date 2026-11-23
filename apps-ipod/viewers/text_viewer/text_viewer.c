@@ -537,6 +537,7 @@ static off_t tv_page(off_t start, bool render)
     struct text_layout tl = {
         .font = tv.font,
         .bold = -1,
+        .small = -1,
         .width = tv.vp.width,
         .justify = global_settings.text_viewer_align == TV_ALIGN_JUSTIFIED,
         .fg = tv.vp.fg_pattern,

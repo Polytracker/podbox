@@ -1849,6 +1849,34 @@ static bool ns_uses(const char *text, const char *name)
     return false;
 }
 
+/* The address of a `[label](address)` whose `]` is at `e`, its `<>`
+ * left out, into `*a` and `*n`; false for none, or the web's. The Markdown
+ * back end decides the same (ts_text.c). */
+static bool ns_address(const char *e, const char **a, size_t *n)
+{
+    const char *p, *end;
+    int depth = 0;
+
+    if (e[1] != '(')
+        return false;
+    for (end = e + 2; *end && *end != '\n' && (*end != ')' || depth); end++)
+        depth += *end == '(' ? 1 : *end == ')' ? -1 : 0;
+    if (*end != ')')
+        return false;
+    for (p = e + 2; p < end && (*p == ' ' || *p == '<'); p++)
+        ;
+    while (end > p && (end[-1] == ' ' || end[-1] == '>'))
+        end--;
+    *a = p;
+    *n = end - p;
+    if (!*n || *p == '#' || !strncasecmp(p, "www.", 4))
+        return false;
+    for (; p < end && *p != '/'; p++)
+        if (*p == ':')
+            return false;
+    return true;
+}
+
 /* Whether `text` links to the name whose key is `key` */
 static bool ns_links_to(const char *text, uint32_t key)
 {
@@ -1878,10 +1906,15 @@ static bool ns_links_album_of(const char *text, long seek, uint32_t artist)
 
     for (s = strchr(text, '['); s; s = strchr(s + 1, '['))
     {
+        const char *a;
+        size_t n;
+
         for (e = s + 1; *e && *e != ']' && *e != '\n'; e++)
             ;
         if (*e == ']'
-            && notes_link_find(s + 1, e - s - 1, artist, -1, &t)
+            && (ns_address(e, &a, &n)
+                ? notes_link_at(a, n, artist, -1, &t)
+                : notes_link_find(s + 1, e - s - 1, artist, -1, &t))
             && (t.to == NOTES_TO_ALBUM || t.to == NOTES_TO_PAGE)
             && notes_album_by(t.album, seek))
             return true;

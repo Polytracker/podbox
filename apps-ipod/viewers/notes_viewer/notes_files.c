@@ -225,37 +225,59 @@ static bool nw_unstage(void)
     return ok;
 }
 
-/* A page in /Notes: `rel` is its path under /Notes, `leaf` its file name
- * and `len` that without the extension */
-static void nw_found_in_notes(const char *path, const char *rel,
-                              const char *leaf, size_t len, int rank)
+/* The index's keys of a page in /Notes: `rel` is its path under /Notes,
+ * `leaf` its file name and `len` that without the extension */
+static void nw_keys(const char *rel, const char *leaf, size_t len,
+                    struct notes_page *pg)
 {
     const char *slash = strchr(rel, '/');
     size_t flen = slash && slash < leaf ? (size_t)(slash - rel) : 0;
     size_t bare = notes_bare_len(leaf, len);
     uint32_t part = bare < len ? art_name_hash_n(leaf, bare) : 0;
 
+    memset(pg, 0, sizeof(*pg));
     if (flen == 6 && !strncasecmp(rel, "People", 6))
-        nw_add(NOTES_PAGE_PERSON, art_name_hash_n(leaf, len),
-               art_name_alt_hash_n(leaf, len), part, 0, 0, path, rank);
+    {
+        pg->kind = NOTES_PAGE_PERSON;
+        pg->key = art_name_hash_n(leaf, len);
+        pg->alt = art_name_alt_hash_n(leaf, len);
+        pg->part = part;
+    }
     else if (flen == 6 && !strncasecmp(rel, "Albums", 6))
     {
         const char *dash = notes_dash(leaf, len);
 
+        pg->kind = NOTES_PAGE_ALBUM;
         if (dash)
-            nw_add(NOTES_PAGE_ALBUM,
-                   nw_work_key(leaf, dash - leaf, dash + 3,
-                               leaf + len - dash - 3),
-                   0, art_name_hash_n(dash + 3, leaf + len - dash - 3),
-                   art_name_hash_n(leaf, dash - leaf), 0, path, rank);
+        {
+            pg->key = nw_work_key(leaf, dash - leaf, dash + 3,
+                                  leaf + len - dash - 3);
+            pg->part = art_name_hash_n(dash + 3, leaf + len - dash - 3);
+            pg->by = art_name_hash_n(leaf, dash - leaf);
+        }
         else
-            nw_add(NOTES_PAGE_ALBUM, nw_work_key(NULL, 0, leaf, len), 0,
-                   art_name_hash_n(leaf, len), 0, 0, path, rank);
+        {
+            pg->key = nw_work_key(NULL, 0, leaf, len);
+            pg->part = art_name_hash_n(leaf, len);
+        }
     }
     else
-        nw_add(NOTES_PAGE_OTHER, art_name_hash_n(leaf, len),
-               art_name_alt_hash_n(leaf, len), part,
-               flen ? art_name_hash_n(rel, flen) : 0, 0, path, rank);
+    {
+        pg->kind = NOTES_PAGE_OTHER;
+        pg->key = art_name_hash_n(leaf, len);
+        pg->alt = art_name_alt_hash_n(leaf, len);
+        pg->part = part;
+        pg->by = flen ? art_name_hash_n(rel, flen) : 0;
+    }
+}
+
+static void nw_found_in_notes(const char *path, const char *rel,
+                              const char *leaf, size_t len, int rank)
+{
+    struct notes_page pg;
+
+    nw_keys(rel, leaf, len, &pg);
+    nw_add(pg.kind, pg.key, pg.alt, pg.part, pg.by, 0, path, rank);
 }
 
 /* bio.* or notes.* beside the music, in the folder `folder` (`flen` bytes
@@ -379,6 +401,43 @@ const struct notes_page *notes_page_get(int i)
 const char *notes_page_path(const struct notes_page *pg)
 {
     return nw.pool + pg->path;
+}
+
+int notes_page_at(const char *rel, size_t len)
+{
+    static char want[MAX_PATH];
+    const char *leaf, *dot;
+    struct notes_page k;
+    int i, best = -1, n = notes_page_count();
+
+    if (len >= sizeof(want) - sizeof(NOTES_DIR) - 1)
+        return -1;
+    memcpy(want, rel, len);
+    want[len] = '\0';
+    leaf = strrchr(want, '/');
+    leaf = leaf ? leaf + 1 : want;
+    dot = strrchr(leaf, '.');
+    if (notes_ext_rank(dot))
+        len = dot - want;
+    want[len] = '\0';
+    if (!*leaf)
+        return -1;
+    nw_keys(want, leaf, want + len - leaf, &k);
+    for (i = 0; i < n; i++)
+    {
+        const struct notes_page *pg = &nw.pages[i];
+        const char *p;
+
+        if (pg->key != k.key || pg->kind != k.kind || pg->dir
+            || (best >= 0 && !notes_page_better(pg, &nw.pages[best])))
+            continue;
+        /* The key settles it but for a clash: the path says */
+        p = path_key_strip(notes_page_path(pg)) + sizeof(NOTES_DIR);
+        dot = strrchr(p, '.');
+        if (dot && (size_t)(dot - p) == len && !strncasecmp(p, want, len))
+            best = i;
+    }
+    return best;
 }
 
 bool notes_page_better(const struct notes_page *a, const struct notes_page *b)

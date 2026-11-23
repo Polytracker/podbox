@@ -414,6 +414,9 @@ int font_get_ui_bold(void);
 /* The theme's heading font ('font heading'), loaded and owned as the bold
  * one is; -1 when the theme names none or it failed to load */
 int font_get_ui_heading(void);
+/* The theme's small font ('font small'), for the lesser lines of a Liner
+ * Notes page, loaded and owned alike; -1 when the theme names none */
+int font_get_ui_small(void);
 void settings_display(void);
 
 enum optiontype { RB_INT, RB_BOOL };
@@ -961,6 +964,8 @@ struct user_settings
     unsigned char bold_font_file[MAX_FILENAME+1];
     /* The theme's font for page titles; "-" means none */
     unsigned char heading_font_file[MAX_FILENAME+1];
+    /* The theme's font for small text; "-" means none */
+    unsigned char small_font_file[MAX_FILENAME+1];
     int glyphs_to_cache; /* default font allocation size in glyphs */
     /* Core text viewer (viewers/text_viewer). */
     int text_viewer_colour_mode;  /* TV_COLOUR_* */

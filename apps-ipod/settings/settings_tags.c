@@ -284,6 +284,7 @@ static const struct tag_row tag_rows[] = {
 { "font",                TAG_APPEARANCE,                         "theme typeface" },
 { "font bold",           TAG_ADVANCED|TAG_APPEARANCE|TAG_THEMEAUTHOR, "theme typeface" },
 { "font heading",        TAG_ADVANCED|TAG_APPEARANCE|TAG_THEMEAUTHOR, "theme typeface title liner notes" },
+{ "font small",          TAG_ADVANCED|TAG_APPEARANCE|TAG_THEMEAUTHOR, "theme typeface small text liner notes" },
 { "backdrop",            TAG_APPEARANCE|TAG_THEMEAUTHOR,         "theme background image wallpaper" },
 { "iconset",             TAG_ADVANCED|TAG_APPEARANCE|TAG_THEMEAUTHOR, "icons theme" },
 { "viewers iconset",     TAG_ADVANCED|TAG_APPEARANCE|TAG_THEMEAUTHOR, "icons theme" },

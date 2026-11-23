@@ -181,6 +181,15 @@ void ts_close(ts_source *s);
 /* Just after TS_HEADING_OPEN, a `##` heading or deeper: a lesser heading,
  * which a screen that sets headings in bold underlines instead */
 #define TS_HEADING_MINOR 0xE011
+/* First inside a name's hidden part, a `[label](address)`'s: the rest of
+ * the part is the page's location under /Notes, `People/Steve Gadd`, its
+ * spaces no-break spaces. The label is the whole of what shows. */
+#define TS_ADDRESS       0xE012
+/* Text between TS_SMALL_OPEN and TS_SMALL_CLOSE, Markdown's
+ * `<small>...</small>`, is drawn in a smaller font when a screen has one.
+ * Neither outlives its line. */
+#define TS_SMALL_OPEN    0xE013
+#define TS_SMALL_CLOSE   0xE014
 
 /* The text of the note `href` refers to from chapter `part`, into buf as a
  * string: the element that has the id, or the paragraph an inline one is
