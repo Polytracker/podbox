@@ -1622,6 +1622,58 @@ static void nv_draw_scroll_bar(void)
     screens[SCREEN_MAIN].fillrect(LCD_WIDTH - NV_BAR_W - 2, y, NV_BAR_W, h);
 }
 
+/* The playing track's entry, or -1: found again only when the track
+ * changes. True when it changed. */
+static int nv_playing = -1;
+
+static bool nv_playing_changed(void)
+{
+    static char path[MAX_PATH];
+    struct mp3entry *id3 = audio_current_track();
+    const char *now = id3 && (audio_status() & AUDIO_STATUS_PLAY)
+                      ? id3->path : "";
+    int was = nv_playing;
+
+    if (strcmp(now, path))
+    {
+        strlcpy(path, now, sizeof(path));
+        nv_playing = *now ? tagcache_find_path(now) : -1;
+    }
+    return nv_playing != was;
+}
+
+/* A still note in the margin beside the playing track, by its row in the
+ * album's track list and its heading on the album's pages */
+static void nv_draw_playing(void)
+{
+    static const char *const note[] = {
+        "...X...", "...XX..", "...X.X.", "...X..X", "...X...",
+        "...X...", ".XXX...", "XXXX...", "XXXX...", ".XX....",
+    };
+    struct screen *d = &screens[SCREEN_MAIN];
+    int k, r, c;
+
+    if (nv_playing < 0 || nv.doc.album < 0)
+        return;
+    d->set_foreground(nv.accent);
+    for (k = 0; k < nv.nlinks; k++)
+    {
+        const struct nv_link *lk = &nv.links[k];
+        const struct nv_line *l = &nv.lines[lk->line];
+        int y = nv.text_top + l->y - nv.scroll + l->ln.ascent
+                - (int)ARRAYLEN(note) + 1;
+
+        if (lk->t.to != NOTES_TO_TRACK || lk->t.notes
+            || lk->t.track != nv_playing || lk->t.album != nv.doc.album
+            || y < 0 || y + (int)ARRAYLEN(note) > LCD_HEIGHT - nv_foot())
+            continue;
+        for (r = 0; r < (int)ARRAYLEN(note); r++)
+            for (c = 0; note[r][c]; c++)
+                if (note[r][c] == 'X')
+                    d->drawpixel(1 + c, y + r);
+    }
+}
+
 /* Blurred's picture behind the page, each pixel doubled */
 static void nv_draw_backdrop(void)
 {
@@ -1660,6 +1712,7 @@ static void nv_draw(void)
     if (nv.has_banner)
         nv_draw_banner();
     nv_draw_lines();
+    nv_draw_playing();
     nv_draw_title();
     nv_draw_scroll_bar();
     nv_draw_progress(false);
@@ -3202,6 +3255,7 @@ static int nv_run(const struct nv_req *r)
         goto done;
     }
     shown = true;
+    nv_playing_changed();
     /* Coming back to the page left, it is not a page to go back to */
     if (nv.nhist && nv_same_page(&nv.hist[nv.nhist - 1].t, &nv.t))
         nv.nhist--;
@@ -3326,6 +3380,8 @@ static int nv_run(const struct nv_req *r)
                     nv.cur = nv_natural(false);
                     nv_draw();
                 }
+                else if (nv_playing_changed())
+                    nv_draw();          /* the note moves to the next track */
                 else
                 {
                     nv_draw_progress(true);
