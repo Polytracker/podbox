@@ -25,7 +25,6 @@
 #include "audio.h"
 #include "audio/playback.h" /* add_playbacklog */
 #include "storage.h"
-#include "disk.h"           /* disk_unmount_all */
 #include "usb_core.h"       /* usb_core_host_wrote_storage */
 #include "iap-usb.h"        /* iap_on_power_off */
 #ifdef IPOD_ACCESSORY_PROTOCOL
@@ -286,42 +285,20 @@ void car_adapter_mode_init(void)
 }
 
 #ifdef BOOTFILE
-/* Starts the firmware on disk again. A reload ends this run as a power-off
- * does, so the same things come first, or a write cut off here leaves the
- * filesystem with clusters it cannot account for: the database is left
- * between commits, every background pass is stopped, and the disk is
- * unmounted, which writes out the sectors the filesystem still holds. The
- * bus is left first too: with the USB Sound Card on, the host is still
- * talking to us after an eject, and a controller that stops answering
- * mid-session is what Windows reports as a device that has malfunctioned.
- *
- * False, with nothing done, when the database or a background pass would not
- * stop in time: try again later. True when the load was tried; one that
- * fails returns, with the disk, the passes and the bus taken back. */
-static bool restart_firmware(void)
+/* Starts the firmware on disk again. The bus is left first: with the USB
+ * Sound Card on, the host is still talking to us after an eject, and a
+ * controller that stops answering mid-session is what Windows reports as a
+ * device that has malfunctioned. A load that fails returns, and the bus is
+ * taken back if the cable is still in. */
+static void restart_firmware(void)
 {
-    long until = current_tick + BG_HALT_TIMEOUT;
-
-    while (!tagcache_prepare_shutdown())
-    {
-        if (TIME_AFTER(current_tick, until))
-            return false;
-        sleep(HZ / 10);
-    }
-    if (!bg_task_halt(BG_HALT_TIMEOUT))
-    {
-        bg_task_resume();
-        return false;
-    }
     audio_hard_stop();
+    bg_task_halt(BG_HALT_TIMEOUT);
     usb_enable(false);
-    disk_unmount_all();
     rolo_load(BOOTDIR "/" BOOTFILE);
-    disk_mount_all();
     bg_task_resume();
     if (usb_inserted())
         usb_enable(true);
-    return true;
 }
 
 /* A computer rewrote the database (tools/database_pb). This run holds the old
@@ -332,7 +309,10 @@ static void restart_if_database_replaced(void)
     static bool tried = false;
 
     if (!tried && tagcache_changed_over_usb())
-        tried = restart_firmware();
+    {
+        tried = true;
+        restart_firmware();
+    }
 }
 
 /* Once the host has let go of the disk: a prompt any earlier would pop while
@@ -531,8 +511,6 @@ void check_bootfile(bool do_rolo)
     static time_t mtime = 0;
     DIR* dir = NULL;
     struct dirent* entry = NULL;
-    time_t before = mtime;
-    bool restart = false;
 
     /* 1. open BOOTDIR and find the BOOTFILE dir entry */
     dir = opendir(BOOTDIR);
@@ -555,20 +533,14 @@ void check_bootfile(bool do_rolo)
                     static const struct text_message message={ lines, 2 };
                     button_clear_queue(); /* Empty the keyboard buffer */
                     if(gui_syncyesno_run(&message, NULL, NULL) == YESNO_YES)
-                        restart = true;
+                        restart_firmware();
                 }
             }
             mtime = info.mtime;
             break;
         }
     }
-    closedir(dir);  /* before the reload unmounts the disk under it */
-
-    if (restart && !restart_firmware())
-    {
-        mtime = before;                 /* asked again at the next check */
-        splash(HZ * 2, ID2P(LANG_TAGCACHE_BUSY));
-    }
+    closedir(dir);
 }
 #endif
 
