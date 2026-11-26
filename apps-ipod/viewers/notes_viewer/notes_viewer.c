@@ -109,6 +109,8 @@
 #define NV_MARGIN_L     10
 #define NV_MARGIN_R     12
 #define NV_PROGRESS     2           /* the progress line along the foot */
+#define NV_BAR_W        3           /* Scroll Bar's handle, 2 px in from the
+                                       edge: the text narrower by as much */
 #define NV_THUMB        300         /* the art cache's largest size */
 #define NV_TEXT_MAX     (40 * 1024)
 #define NV_LINES_MAX    1024
@@ -547,6 +549,13 @@ static int nv_name_font(void)
     return best;
 }
 
+/* The text's width, narrower beside Scroll Bar's handle */
+static void nv_text_width(void)
+{
+    nv.tvp.width = LCD_WIDTH - NV_MARGIN_L - NV_MARGIN_R
+                   - (global_settings.liner_notes_scroll_bar ? NV_BAR_W : 0);
+}
+
 static void nv_setup_screen(void)
 {
     viewportmanager_theme_enable(SCREEN_MAIN, false, &nv.vp);
@@ -554,7 +563,7 @@ static void nv_setup_screen(void)
     nv.vp.font = nv.font;
     nv.tvp = nv.vp;
     nv.tvp.x = NV_MARGIN_L;
-    nv.tvp.width = LCD_WIDTH - NV_MARGIN_L - NV_MARGIN_R;
+    nv_text_width();
     nv.lh = font_get(nv.font)->height;
     nv.bold = font_get_ui_bold();
     if (nv.bold == nv.font)
@@ -1511,6 +1520,22 @@ static void nv_draw_banner(void)
     }
 }
 
+/* Scroll Bar's handle down the right, in the link colour, between the slim
+ * bar and the progress line: no track behind it */
+static void nv_draw_scroll_bar(void)
+{
+    int top = nv_bar_shown() ? NV_ROW : 0;
+    int track = LCD_HEIGHT - nv_foot() - top - 4;
+    int h = MAX(12, track * track / (track + nv.max_scroll));
+    int y;
+
+    if (!global_settings.liner_notes_scroll_bar || nv.max_scroll <= 0)
+        return;
+    y = top + 2 + (int)((long)(track - h) * nv.scroll / nv.max_scroll);
+    screens[SCREEN_MAIN].set_foreground(nv.accent);
+    screens[SCREEN_MAIN].fillrect(LCD_WIDTH - NV_BAR_W - 2, y, NV_BAR_W, h);
+}
+
 /* Blurred's picture behind the page, each pixel doubled */
 static void nv_draw_backdrop(void)
 {
@@ -1550,6 +1575,7 @@ static void nv_draw(void)
         nv_draw_banner();
     nv_draw_lines();
     nv_draw_title();
+    nv_draw_scroll_bar();
     nv_draw_progress(false);
     d->set_drawmode(DRMODE_SOLID);
     d->update_viewport();
@@ -2516,6 +2542,7 @@ static bool nv_open(const struct nv_req *r)
 
     nv.focus_line = -1;
     nv_carve();
+    nv_text_width();
     if (!nv_build(r))
         return false;
     nv_art_palette();
