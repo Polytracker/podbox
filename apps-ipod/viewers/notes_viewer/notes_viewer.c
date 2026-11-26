@@ -3030,6 +3030,20 @@ static int nv_menu_run(bool page)
     return -1;
 }
 
+/* The page back at its top, its first link current; false when it is
+ * there already */
+static bool nv_to_top(void)
+{
+    int was = nv.scroll, cur = nv.cur;
+
+    nv.scroll = 0;
+    nv.cur = nv_link_shown(0) ? 0 : -1;
+    if (was == 0 && cur == nv.cur)
+        return false;
+    nv_draw();
+    return true;
+}
+
 /* Select or Right: the current link followed. A track of this page's own
  * album has nowhere else to go, so it plays the album from that track. A
  * GO_TO_* code when the screen is to be left, else -1. */
@@ -3153,9 +3167,34 @@ static int nv_run(const struct nv_req *r)
                 break;
 
             case ACTION_WPS_MENU:
+                /* Under Play Button's Now Playing, the page's top first,
+                 * its first link current: on an album's pages, the strip */
+                if (global_settings.liner_notes_play_button == NOTES_PLAY_WPS
+                    && nv_to_top())
+                    break;
                 goto done;
 
+            case ACTION_WPS_STOP:               /* Play held */
+                if (global_settings.liner_notes_play_button == NOTES_PLAY_WPS)
+                    wps_do_playpause(false);
+                break;
+
             case ACTION_WPS_PLAY:
+                if (global_settings.liner_notes_play_button == NOTES_PLAY_WPS)
+                {
+                    /* to Now Playing, the music going: resumed, or an album
+                     * page's album played when nothing is */
+                    int st = audio_status();
+
+                    if (st & AUDIO_STATUS_PAUSE)
+                        wps_do_playpause(false);
+                    else if (!(st & AUDIO_STATUS_PLAY)
+                             && nv.doc.kind == NOTES_PAGE_ALBUM
+                             && nv.doc.album >= 0)
+                        nv.play_album = nv.doc.album;
+                    ret = GO_TO_WPS;
+                    goto done;
+                }
                 if (nv.doc.kind == NOTES_PAGE_ALBUM && nv.doc.album >= 0
                     && !nv_playing_album(nv.doc.album))
                 {
