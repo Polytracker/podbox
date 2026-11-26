@@ -884,7 +884,13 @@ the page, where you were.
 What Play does on a page. Play/Pause pauses and resumes, and on an album
 page whose album is not playing, plays it. Now Playing goes to the
 now-playing screen, holding Play pauses, and Menu takes you to the top of the
-page before it leaves.
+page before it leaves. Headings moves down to the next section heading and
+Menu back up to the one before, leaving from the top of the page.
+
+[liner notes hold play]
+What holding Play does on a page: nothing, pause and resume, or go to the
+now-playing screen. Under Play Button's Now Playing, holding Play always
+pauses.
 
 [art cache album source]
 Where covers of albums, books and podcasts come from: the image in the folder,

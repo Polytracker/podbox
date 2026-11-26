@@ -703,6 +703,7 @@ struct user_settings
     int liner_notes_open_at;        /* NOTES_OPEN_* */
     int liner_notes_when_playing;   /* NOTES_PLAYING_* */
     int liner_notes_play_button;    /* NOTES_PLAY_* */
+    int liner_notes_hold_play;      /* NOTES_HOLD_* */
     /* Which of the rows above a Music list are shown: [All Tracks],
      * [Random] and [Shuffle Albums] */
     bool show_all_tracks_row;

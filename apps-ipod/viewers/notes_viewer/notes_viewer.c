@@ -3170,6 +3170,95 @@ static int nv_menu_run(bool page)
     return -1;
 }
 
+static bool nv_to_top(void);
+
+/* To Now Playing with the music going: resumed, or an album page's album
+ * played when nothing is */
+static int nv_to_wps(void)
+{
+    int st = audio_status();
+
+    if (st & AUDIO_STATUS_PAUSE)
+        wps_do_playpause(false);
+    else if (!(st & AUDIO_STATUS_PLAY) && nv.doc.kind == NOTES_PAGE_ALBUM
+             && nv.doc.album >= 0)
+        nv.play_album = nv.doc.album;
+    return GO_TO_WPS;
+}
+
+/* Line `i` the first of a `##` heading (or deeper; the Markdown reader marks
+ * no finer), a stop for Play Button's Headings */
+static bool nv_section(int i)
+{
+    return (nv.lines[i].flags & NV_MINOR)
+           && !memcmp(nv.text + nv.lines[i].off, TL_HEAD_OPEN, 3);
+}
+
+/* The scroll that puts line `i` at the top, under the slim bar */
+static int nv_scroll_for(int i)
+{
+    int s = nv.text_top + nv.lines[i].y - (nv_bar_shown() ? NV_ROW : 0);
+
+    return MAX(0, MIN(s, nv.max_scroll));
+}
+
+/* Section heading `i` made the place: at the top, and current, if it is a
+ * track's, so Select plays it */
+static void nv_land(int i)
+{
+    int k;
+
+    nv.scroll = nv_scroll_for(i);
+    nv.cur = -1;
+    for (k = 0; k < nv.nlinks && nv.cur < 0; k++)
+        if (nv.links[k].head && nv.links[k].line == i)
+            nv.cur = k;
+    if (nv.cur < 0)
+        nv.cur = nv_natural(false);
+    nv_draw();
+}
+
+/* The line of the current link when it is a track's heading, else -1 */
+static int nv_cur_heading(void)
+{
+    return nv.cur >= 0 && nv.links[nv.cur].head ? nv.links[nv.cur].line : -1;
+}
+
+/* Play under Headings: the next section heading after the current one when
+ * a track's heading is current, else the next below the top of the screen.
+ * Nothing at the last. */
+static bool nv_next_heading(void)
+{
+    int at = nv_cur_heading(), i;
+
+    for (i = 0; i < nv.nlines; i++)
+        if (nv_section(i) && (at >= 0 ? i > at
+                                      : nv_scroll_for(i) > nv.scroll))
+        {
+            nv_land(i);
+            return true;
+        }
+    return false;
+}
+
+/* Menu under Headings: the section heading before, then the top of the
+ * page; false there, to leave */
+static bool nv_prev_heading(void)
+{
+    int at = nv_cur_heading(), best = -1, i;
+
+    for (i = 0; i < nv.nlines; i++)
+        if (nv_section(i) && (at >= 0 ? i < at
+                                      : nv_scroll_for(i) < nv.scroll))
+            best = i;
+    if (best >= 0)
+    {
+        nv_land(best);
+        return true;
+    }
+    return nv_to_top();
+}
+
 /* The page back at its top, its first link current; false when it is
  * there already */
 static bool nv_to_top(void)
@@ -3309,32 +3398,40 @@ static int nv_run(const struct nv_req *r)
 
             case ACTION_WPS_MENU:
                 /* Under Play Button's Now Playing, the page's top first,
-                 * its first link current: on an album's pages, the strip */
+                 * its first link current: on an album's pages, the strip.
+                 * Under Headings, the heading before, then the top. */
                 if (global_settings.liner_notes_play_button == NOTES_PLAY_WPS
                     && nv_to_top())
+                    break;
+                if (global_settings.liner_notes_play_button
+                    == NOTES_PLAY_HEADINGS && nv_prev_heading())
                     break;
                 goto done;
 
             case ACTION_WPS_STOP:               /* Play held */
-                if (global_settings.liner_notes_play_button == NOTES_PLAY_WPS)
+                if (global_settings.liner_notes_play_button == NOTES_PLAY_WPS
+                    || global_settings.liner_notes_hold_play
+                       == NOTES_HOLD_PAUSE)
                     wps_do_playpause(false);
+                else if (global_settings.liner_notes_hold_play
+                         == NOTES_HOLD_WPS)
+                {
+                    ret = nv_to_wps();
+                    goto done;
+                }
                 break;
 
             case ACTION_WPS_PLAY:
                 if (global_settings.liner_notes_play_button == NOTES_PLAY_WPS)
                 {
-                    /* to Now Playing, the music going: resumed, or an album
-                     * page's album played when nothing is */
-                    int st = audio_status();
-
-                    if (st & AUDIO_STATUS_PAUSE)
-                        wps_do_playpause(false);
-                    else if (!(st & AUDIO_STATUS_PLAY)
-                             && nv.doc.kind == NOTES_PAGE_ALBUM
-                             && nv.doc.album >= 0)
-                        nv.play_album = nv.doc.album;
-                    ret = GO_TO_WPS;
+                    ret = nv_to_wps();
                     goto done;
+                }
+                if (global_settings.liner_notes_play_button
+                    == NOTES_PLAY_HEADINGS)
+                {
+                    nv_next_heading();
+                    break;
                 }
                 if (nv.doc.kind == NOTES_PAGE_ALBUM && nv.doc.album >= 0
                     && !nv_playing_album(nv.doc.album))

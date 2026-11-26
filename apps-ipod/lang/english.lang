@@ -28405,6 +28405,48 @@
   </voice>
 </phrase>
 <phrase>
+  id: LANG_NOTES_HEADINGS
+  desc: liner notes Play Button choice: Play and Menu move between a page's headings
+  user: core
+  <source>
+    *: "Headings"
+  </source>
+  <dest>
+    *: "Headings"
+  </dest>
+  <voice>
+    *: "Headings"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_HOLD_PLAY
+  desc: liner notes setting: what holding Play does on a page
+  user: core
+  <source>
+    *: "Hold Play"
+  </source>
+  <dest>
+    *: "Hold Play"
+  </dest>
+  <voice>
+    *: "Hold Play"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_NOTHING
+  desc: liner notes Hold Play choice: holding Play does nothing
+  user: core
+  <source>
+    *: "Nothing"
+  </source>
+  <dest>
+    *: "Nothing"
+  </dest>
+  <voice>
+    *: "Nothing"
+  </voice>
+</phrase>
+<phrase>
   id: LANG_NOTES_BACKGROUND
   desc: liner notes setting: what lies behind a page's text
   user: core

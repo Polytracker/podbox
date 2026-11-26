@@ -54,6 +54,16 @@ enum
                                    album is not playing, plays it */
     NOTES_PLAY_WPS,             /* goes to Now Playing; held, pauses; and
                                    Menu goes to the page's top first */
+    NOTES_PLAY_HEADINGS,        /* the next `##` heading, and Menu the one
+                                   before; held, as liner_notes_hold_play */
+};
+
+/* liner_notes_hold_play: what holding Play does, but under NOTES_PLAY_WPS */
+enum
+{
+    NOTES_HOLD_NOTHING = 0,
+    NOTES_HOLD_PAUSE,
+    NOTES_HOLD_WPS,             /* to Now Playing */
 };
 
 /* Under Custom, where the text, the links or the page take their colour */
