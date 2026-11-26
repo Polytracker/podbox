@@ -989,6 +989,31 @@ static void nv_layout_init(struct text_layout *tl)
     tl->current = nv.cur >= 0 ? nv.text + nv.links[nv.cur].off : NULL;
 }
 
+/* A {{tracks}} row's title, past its number and the two spaces after it,
+ * marks about either side: how far in its wrapped lines start, or -1 for
+ * any other line. A number takes two spaces after it nowhere else. */
+static int nv_track_row(struct text_layout *tl, unsigned char *s, size_t n)
+{
+    size_t j = 0;
+    bool digits = false;
+    int st = 0;
+
+    while (j + 3 <= n && s[j] == 0xee && s[j + 1] == 0x80)
+        j += 3;
+    while (j < n && s[j] >= '0' && s[j] <= '9')
+        j++, digits = true;
+    while (j + 3 <= n && s[j] == 0xee && s[j + 1] == 0x80)
+        j += 3;
+    if (!digits || j + 1 >= n || s[j] != ' ' || s[j + 1] != ' ')
+        return -1;
+    while (j < n && s[j] == ' ')
+        j++;
+    while (j + 3 <= n && s[j] == 0xee && s[j + 1] == 0x80
+           && s[j + 2] != TL_NAME_CLOSE)
+        j += 3;
+    return tl_text_width(tl, s, j, &st);
+}
+
 /* The page laid out whole: each line's place in the text and what it is */
 static void nv_layout(void)
 {
@@ -1024,6 +1049,9 @@ static void nv_layout(void)
             item = tl_item_indent(&tl, s + skip, avail - skip,
                                   nv.quote_indent, &first, &bullet);
             item = item ? item : -1;
+            if (item < 0 && !head
+                && (item = nv_track_row(&tl, s + skip, avail - skip)) >= 0)
+                first = 0;
             if (bullet >= 0)
                 bullet += indent;
             indent += first;
