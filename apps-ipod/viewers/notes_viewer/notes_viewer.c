@@ -2483,7 +2483,7 @@ static bool nv_open(const struct nv_req *r)
     nv_backdrop();
     block = nv.name_h;
     nv.name_y = nv.has_banner ? NV_BAN_H - 6 - block : 8;
-    nv.text_top = nv.name_y + block + 10;
+    nv.text_top = nv.name_y + block + 4;
     nv.scroll = 0;
     nv_clamp_scroll();
     if (nv.focus_line >= 0)
