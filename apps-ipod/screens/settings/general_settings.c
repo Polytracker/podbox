@@ -1217,11 +1217,24 @@ MENUITEM_SETTING(liner_notes_banners, &global_settings.liner_notes_banners,
                  NULL);
 MENUITEM_SETTING(liner_notes_progress, &global_settings.liner_notes_progress,
                  NULL);
+MENUITEM_SETTING(liner_notes_subheadings,
+                 &global_settings.liner_notes_subheadings, NULL);
+MENUITEM_SETTING(liner_notes_scroll_bar,
+                 &global_settings.liner_notes_scroll_bar, NULL);
+MENUITEM_SETTING(liner_notes_open_at, &global_settings.liner_notes_open_at,
+                 NULL);
+MENUITEM_SETTING(liner_notes_when_playing,
+                 &global_settings.liner_notes_when_playing, NULL);
+MENUITEM_SETTING(liner_notes_play_button,
+                 &global_settings.liner_notes_play_button, NULL);
 MAKE_MENU(liner_notes_menu, ID2P(LANG_NOTES_SETTING), 0, Icon_NOICON,
           &liner_notes, &liner_notes_colours, &liner_notes_text,
           &liner_notes_links, &liner_notes_page, &liner_notes_dim,
           &liner_notes_heads, &liner_notes_quote, &liner_notes_background,
-          &liner_notes_banners, &liner_notes_progress);
+          &liner_notes_banners, &liner_notes_progress,
+          &liner_notes_subheadings, &liner_notes_scroll_bar,
+          &liner_notes_open_at, &liner_notes_when_playing,
+          &liner_notes_play_button);
 MENUITEM_SETTING(segregate_audiobooks, &global_settings.segregate_audiobooks,
                  NULL);
 MENUITEM_SETTING(segregate_podcasts, &global_settings.segregate_podcasts,

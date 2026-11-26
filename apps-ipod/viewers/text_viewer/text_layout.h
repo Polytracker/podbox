@@ -25,6 +25,8 @@ struct text_layout
     unsigned dim;       /* dim text's colour */
     bool head_bold;     /* headings set in `bold`, as bold text is, but for
                          * those TS_HEADING_MINOR marks */
+    bool minor_bold;    /* with head_bold, those TS_HEADING_MINOR marks
+                         * bold too */
     bool links;         /* names drawn as links: in `link`, and the one
                          * whose TS_NAME_OPEN is at `current` in `link_on`,
                          * the caller having filled a box of `link` behind

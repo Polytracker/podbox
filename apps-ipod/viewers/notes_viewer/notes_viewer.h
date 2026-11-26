@@ -26,6 +26,36 @@ enum
     NOTES_BG_BLURRED_DARKER,    /* the same, a light picture taken down */
 };
 
+/* liner_notes_open_at: where Liner Notes from Now Playing opens */
+enum
+{
+    NOTES_OPEN_TRACK = 0,       /* the playing track's section or row */
+    NOTES_OPEN_ALBUM,           /* the top of the album's page */
+};
+
+/* liner_notes_subheadings: how a `##` heading or deeper is set */
+enum
+{
+    NOTES_SUB_UNDERLINED = 0,
+    NOTES_SUB_BOLD,             /* bold at the body's size, no rule */
+};
+
+/* liner_notes_when_playing: where playing from a page goes */
+enum
+{
+    NOTES_PLAYING_WPS = 0,      /* to Now Playing */
+    NOTES_PLAYING_STAY,         /* back to the page, where it was */
+};
+
+/* liner_notes_play_button: what Play does on a page */
+enum
+{
+    NOTES_PLAY_PAUSE = 0,       /* pauses and resumes; on an album page whose
+                                   album is not playing, plays it */
+    NOTES_PLAY_WPS,             /* goes to Now Playing; held, pauses; and
+                                   Menu goes to the page's top first */
+};
+
 /* Under Custom, where the text, the links or the page take their colour */
 enum
 {

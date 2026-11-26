@@ -698,6 +698,11 @@ struct user_settings
     int liner_notes_background;     /* NOTES_BG_*, notes_viewer.h */
     bool liner_notes_banners;       /* the picture at the top of a page */
     bool liner_notes_progress;      /* the line along the foot */
+    int liner_notes_subheadings;    /* NOTES_SUB_*, notes_viewer.h */
+    bool liner_notes_scroll_bar;    /* a handle down the right */
+    int liner_notes_open_at;        /* NOTES_OPEN_* */
+    int liner_notes_when_playing;   /* NOTES_PLAYING_* */
+    int liner_notes_play_button;    /* NOTES_PLAY_* */
     /* Which of the rows above a Music list are shown: [All Tracks],
      * [Random] and [Shuffle Albums] */
     bool show_all_tracks_row;

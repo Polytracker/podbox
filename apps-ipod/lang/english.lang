@@ -28251,6 +28251,160 @@
   </voice>
 </phrase>
 <phrase>
+  id: LANG_NOTES_SUBHEADINGS
+  desc: liner notes setting: how a page's lesser headings are set
+  user: core
+  <source>
+    *: "Subheadings"
+  </source>
+  <dest>
+    *: "Subheadings"
+  </dest>
+  <voice>
+    *: "Subheadings"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_UNDERLINED
+  desc: liner notes Subheadings choice: underlined
+  user: core
+  <source>
+    *: "Underlined"
+  </source>
+  <dest>
+    *: "Underlined"
+  </dest>
+  <voice>
+    *: "Underlined"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_BOLD
+  desc: liner notes Subheadings choice: bold, not underlined
+  user: core
+  <source>
+    *: "Bold"
+  </source>
+  <dest>
+    *: "Bold"
+  </dest>
+  <voice>
+    *: "Bold"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_OPEN_AT
+  desc: liner notes setting: where Liner Notes opened from Now Playing lands
+  user: core
+  <source>
+    *: "Open From Now Playing At"
+  </source>
+  <dest>
+    *: "Open From Now Playing At"
+  </dest>
+  <voice>
+    *: "Open From Now Playing At"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_PLAYING_TRACK
+  desc: liner notes Open From Now Playing At choice: the playing track's place on its album's pages
+  user: core
+  <source>
+    *: "Playing Track"
+  </source>
+  <dest>
+    *: "Playing Track"
+  </dest>
+  <voice>
+    *: "Playing Track"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_ALBUM_PAGE
+  desc: liner notes Open From Now Playing At choice: the top of the album's page
+  user: core
+  <source>
+    *: "Album Page"
+  </source>
+  <dest>
+    *: "Album Page"
+  </dest>
+  <voice>
+    *: "Album Page"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_WHEN_PLAYING
+  desc: liner notes setting: where playing a track or album from a page goes
+  user: core
+  <source>
+    *: "When Playing"
+  </source>
+  <dest>
+    *: "When Playing"
+  </dest>
+  <voice>
+    *: "When Playing"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_GO_TO_WPS
+  desc: liner notes When Playing choice: to the now-playing screen
+  user: core
+  <source>
+    *: "Go to Now Playing"
+  </source>
+  <dest>
+    *: "Go to Now Playing"
+  </dest>
+  <voice>
+    *: "Go to Now Playing"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_STAY
+  desc: liner notes When Playing choice: the music starts and the page stays
+  user: core
+  <source>
+    *: "Stay on Page"
+  </source>
+  <dest>
+    *: "Stay on Page"
+  </dest>
+  <voice>
+    *: "Stay on Page"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_PLAY_BUTTON
+  desc: liner notes setting: what a press of Play does on a page
+  user: core
+  <source>
+    *: "Play Button"
+  </source>
+  <dest>
+    *: "Play Button"
+  </dest>
+  <voice>
+    *: "Play Button"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_NOTES_PLAY_PAUSE
+  desc: liner notes Play Button choice: pause and resume
+  user: core
+  <source>
+    *: "Play/Pause"
+  </source>
+  <dest>
+    *: "Play/Pause"
+  </dest>
+  <voice>
+    *: "Play/Pause"
+  </voice>
+</phrase>
+<phrase>
   id: LANG_NOTES_BACKGROUND
   desc: liner notes setting: what lies behind a page's text
   user: core

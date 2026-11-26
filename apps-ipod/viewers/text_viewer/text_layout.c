@@ -64,7 +64,8 @@ static int tl_style_after(const struct text_layout *tl, const unsigned char *s,
         if (s[2] == TL_BOLD_OPEN || (tl->head_bold && s[2] == 0x82))
             return st | TL_STYLE_BOLD;
         if (s[2] == TL_BOLD_CLOSE
-            || (tl->head_bold && (s[2] == 0x83 || s[2] == TL_MINOR)))
+            || (tl->head_bold && (s[2] == 0x83
+                                  || (s[2] == TL_MINOR && !tl->minor_bold))))
             return st & ~TL_STYLE_BOLD;
         if (s[2] == TL_SMALL_OPEN)
             return st | TL_STYLE_SMALL;

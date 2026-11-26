@@ -981,8 +981,11 @@ static void nv_layout_init(struct text_layout *tl)
     tl->fg = nv.fg;
     tl->dim = nv.dim;
     /* `#` headings bold, or underlined when the theme has no bold font;
-     * `##` and deeper underlined */
+     * `##` and deeper underlined, or bold under Subheadings */
     tl->head_bold = nv.bold >= 0;
+    tl->minor_bold = tl->head_bold
+                     && global_settings.liner_notes_subheadings
+                        == NOTES_SUB_BOLD;
     tl->links = true;
     tl->link = nv.accent;
     tl->link_on = nv.bg;
@@ -1056,7 +1059,8 @@ static void nv_layout(void)
                 bullet += indent;
             indent += first;
         }
-        l->ln.bold = bold || (heading && !minor && tl.head_bold);
+        l->ln.bold = bold || (heading && tl.head_bold
+                              && (!minor || tl.minor_bold));
         l->ln.small = small;
         tl_line_break(&tl, s, avail, nv.tvp.width - indent, &l->ln);
         if (l->ln.used == 0)
@@ -1450,7 +1454,8 @@ static void nv_draw_lines(void)
         if (l->ln.draw > 0)
             tl_draw_line(&tl, nv.text + l->off, &l->ln, y);
         if ((l->flags & NV_HEAD) && l->ln.draw > 0
-            && (!tl.head_bold || (l->flags & NV_MINOR)))
+            && (!tl.head_bold
+                || ((l->flags & NV_MINOR) && !tl.minor_bold)))
         {
             d->set_foreground(nv.head);
             d->hline(l->ln.indent, l->ln.indent + l->ln.width - 1,
@@ -2037,13 +2042,19 @@ MENUITEM_SETTING(nv_banners_item, &global_settings.liner_notes_banners,
                  nv_setting_callback);
 MENUITEM_SETTING(nv_progress_item, &global_settings.liner_notes_progress,
                  nv_setting_callback);
+MENUITEM_SETTING(nv_subheadings_item,
+                 &global_settings.liner_notes_subheadings,
+                 nv_setting_callback);
+MENUITEM_SETTING(nv_scroll_bar_item, &global_settings.liner_notes_scroll_bar,
+                 nv_setting_callback);
 MAKE_MENU(nv_menu, ID2P(LANG_ONPLAY_MENU_TITLE), NULL, Icon_NOICON,
           &nv_page_0, &nv_page_1, &nv_page_2, &nv_page_3, &nv_page_4,
           &nv_page_5, &nv_page_6, &nv_page_7, &nv_play_item, &nv_next_item, &nv_last_item, &nv_go_album_item,
           &nv_go_artist_item, &nv_move_item, &nv_reset_item, &nv_colours_item,
           &nv_text_item, &nv_links_item, &nv_page_item, &nv_dim_item,
           &nv_heads_item, &nv_quote_item, &nv_background_item,
-          &nv_banners_item, &nv_progress_item);
+          &nv_banners_item, &nv_progress_item, &nv_subheadings_item,
+          &nv_scroll_bar_item);
 
 /* The settings the page's menu offers, to see whether one changed */
 static uint32_t nv_settings_sum(void)
@@ -2055,7 +2066,9 @@ static uint32_t nv_settings_sum(void)
                    | s->liner_notes_heads << 15 | s->liner_notes_quote << 18
                    | s->liner_notes_banners << 21
                    | s->liner_notes_progress << 22
-                   | s->liner_notes_background << 23;
+                   | s->liner_notes_background << 23
+                   | s->liner_notes_subheadings << 25
+                   | s->liner_notes_scroll_bar << 26;
     unsigned i;
 
     for (i = 0; i < ARRAYLEN(s->liner_notes_rgb); i++)
