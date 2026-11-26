@@ -3223,6 +3223,8 @@ int notes_viewer(void)
             sizeof(a.albumartist));
     strlcpy(a.artist, id3->artist ? id3->artist : "", sizeof(a.artist));
     strlcpy(a.album, id3->album ? id3->album : "", sizeof(a.album));
+    if (global_settings.liner_notes_open_at == NOTES_OPEN_ALBUM)
+        r.focus = -1;                   /* the album's page, at its top */
     return nv_run(&r);
 }
 
