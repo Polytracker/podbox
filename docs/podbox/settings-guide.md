@@ -461,9 +461,10 @@ Also reached as **Appearance** under `Settings > Playback > Now Playing Screen`.
 |---|---|---|---|
 | Show Album Title | Whether the album name is drawn over the covers, and where. | Show Album and Artist at the Bottom |  |
 | Show Year in Album Title | Shows the release year in the caption, before or after the album's name. | No |  |
-| Background | Which colour fills the screen behind the covers: one of the theme's, which follows Dynamic Colours, or Custom, a colour of your own that stays put. Choosing Custom opens a colour picker; Custom Colour below it changes the colour later. The captions turn black or white to read on it. | Background Colour |  |
+| Background | What fills the screen behind the covers: one of the theme's colours, which follow Dynamic Colours; Custom, a colour of your own that stays put; or Blurred Art, the playing album's cover blurred, as Scrim's menus show it. Choosing Custom opens a colour picker; Custom Colour below it changes the colour later. Blurred Art uses the last album played when nothing is playing, and the Background Colour while there is no cover to blur. | Background Colour |  |
 | Custom Colour | The colour behind the carousel's covers while Background is Custom. Dynamic Colours leave it alone, and the captions turn black or white to read on it. | 000000 |  |
 | Status Bar | Draws the status bar over the carousel. Off gives the covers the whole screen. | No |  |
+| Smooth Edges | Smooths the stepped top and bottom edges of the angled covers, blending the last 1 to 3 rows at each edge; more is softer. Off leaves them stepped. Costs very little. | 2 px |  |
 | View Mode | 3D angles the covers away on both sides. Flat lays them face-on and the same size, in two piles either side of the current one. | 3D |  |
 | 3D Centre Margin | The gap between the front cover and its neighbours in the 3D view. | 0 | **Adv** |
 | 3D Slide Tuck | How far the side covers stack back behind the front one in the 3D view. | 32 | **Adv** |

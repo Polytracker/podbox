@@ -18,3 +18,4 @@
   finished, so a rebuild cut short by USB, a restart or a flat battery leaves
   the library as it was. While it runs, the old database takes its space a
   second time. A rebuild that finds no music at all now keeps the old one.
+- The carousel's angled covers have smoothed edges now (**Smooth Edges**, default 2 px, 0 is Off, in the carousel's Appearance settings), and **Background** has a new choice, **Blurred Art**: the playing album's cover blurred behind the covers.

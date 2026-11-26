@@ -681,6 +681,7 @@ static void draw_album_text(void)
          * not the FONT_UI constant -- see init()'s comment on pf_bold_font. */
         lcd_setfont(screens[SCREEN_MAIN].getuifont());
 
+        lcd_set_foreground(pf_fg2_color);
         get_album_artist(center_index, artisttxt, sizeof(artisttxt));
         artist_line = carousel_caption_fit(artisttxt, artist_fit,
                                            sizeof(artist_fit));

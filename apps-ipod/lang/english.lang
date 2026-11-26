@@ -28460,3 +28460,31 @@
     *: "Blurred Darker"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_CAROUSEL_BG_BLURRED
+  desc: in Carousel settings: Carousel Background choice, the playing album's art blurred
+  user: core
+  <source>
+    *: "Blurred Art"
+  </source>
+  <dest>
+    *: "Blurred Art"
+  </dest>
+  <voice>
+    *: "Blurred Art"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_CAROUSEL_SMOOTH_EDGES
+  desc: in Carousel settings: smooth the stepped top and bottom edges of the angled covers
+  user: core
+  <source>
+    *: "Smooth Edges"
+  </source>
+  <dest>
+    *: "Smooth Edges"
+  </dest>
+  <voice>
+    *: "Smooth Edges"
+  </voice>
+</phrase>

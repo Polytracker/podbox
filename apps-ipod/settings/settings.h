@@ -790,6 +790,7 @@ struct user_settings
     /* Flat view only: how far below the middle cover the piles sit, in pixels.
      * A cover eases down to it on its way out and back up on its way in. */
     int  album_covers_pile_offset;
+    int  album_covers_smooth_edges; /* rows blended at an edge, 0 is off */
     /* The three below shape the tilted view only; flat mode ignores them and
      * the menu hides them. */
     int  album_covers_center_margin;
