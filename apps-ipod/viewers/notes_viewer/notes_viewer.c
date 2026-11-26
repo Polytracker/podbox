@@ -2896,6 +2896,32 @@ static bool nv_reopen(void)
     return true;
 }
 
+static int nv_play_on_leaving(int ret);
+
+/* The album `album` played, from track `track` (or -1): under When Playing's
+ * Go to Now Playing once the screen has let go of the buffer, so a GO_TO_*
+ * code; under Stay on Page now, the page made again where it was, and -1,
+ * or GO_TO_PREVIOUS when it can no longer be made */
+static int nv_play(int album, int track)
+{
+    int cur = nv.cur;
+
+    nv.play_album = album;
+    nv.play_track = track;
+    if (global_settings.liner_notes_when_playing != NOTES_PLAYING_STAY)
+        return GO_TO_WPS;
+    /* The playlist takes the app buffer for the album's order */
+    nv_release();
+    nv_play_on_leaving(GO_TO_WPS);
+    if (!nv_claim())
+        return GO_TO_PREVIOUS;
+    nv.cur = cur;
+    if (!nv_reopen())
+        return GO_TO_PREVIOUS;
+    nv_draw();
+    return -1;
+}
+
 /* The menu of the current link, or of the page for `page`: play what it
  * names, go to it in the library, or move the page's banner, or change the
  * settings. Nothing at all when it would have no rows. A GO_TO_* code when
@@ -2941,9 +2967,7 @@ static int nv_menu_run(bool page)
     switch (nv_do)
     {
         case NV_DO_PLAY:
-            nv.play_album = t->album;
-            nv.play_track = t->to == NOTES_TO_TRACK ? t->track : -1;
-            return GO_TO_WPS;
+            return nv_play(t->album, t->to == NOTES_TO_TRACK ? t->track : -1);
         case NV_DO_NEXT:
         case NV_DO_LAST:
         {
@@ -3021,11 +3045,7 @@ static int nv_select(void)
         return -1;
     }
     if (t->to == NOTES_TO_TRACK && t->album == nv.doc.album && !t->notes)
-    {
-        nv.play_album = t->album;
-        nv.play_track = t->track;
-        return GO_TO_WPS;
-    }
+        return nv_play(t->album, t->track);
     {
         static char file[NV_NAME_MAX];
 
@@ -3139,9 +3159,12 @@ static int nv_run(const struct nv_req *r)
                 if (nv.doc.kind == NOTES_PAGE_ALBUM && nv.doc.album >= 0
                     && !nv_playing_album(nv.doc.album))
                 {
-                    nv.play_album = nv.doc.album;
-                    ret = GO_TO_WPS;
-                    goto done;
+                    if ((go = nv_play(nv.doc.album, -1)) >= 0)
+                    {
+                        ret = go;
+                        goto done;
+                    }
+                    break;
                 }
                 wps_do_playpause(false);
                 break;
