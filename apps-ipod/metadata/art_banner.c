@@ -144,15 +144,16 @@ static int banner_read(const char *path, struct bitmap *bm, int fmt, int w,
     return rc;
 }
 
-bool art_banner_exact(const char *path)
+bool art_banner_exact(const char *path, void *buf, size_t size)
 {
-    static char buf[64];
     struct bitmap bm;
     const char *dot = strrchr(path, '.');
 
+    /* The image readers need a decoder's work area even to read a header:
+     * the caller's, which is there already (a few bytes would never do) */
     return dot && (!strcasecmp(dot, ".jpg") || !strcasecmp(dot, ".jpeg"))
            && banner_read(path, &bm, FORMAT_NATIVE | FORMAT_RETURN_SIZE,
-                          ART_BANNER_W, ART_BANNER_H, buf, sizeof(buf)) > 0
+                          ART_BANNER_W, ART_BANNER_H, buf, size) > 0
            && bm.width == ART_BANNER_W && bm.height == ART_BANNER_H;
 }
 
@@ -300,7 +301,7 @@ static bool banner_sweep_dir(const char *dir, int kind, int n_old, int *n_new,
         if (!rec.key || banner_find(banner_new, *n_new, rec.key, kind) >= 0)
             continue;                       /* no name, or a second image */
         snprintf(banner_path, sizeof(banner_path), "%s/%s", dir, e->d_name);
-        if (art_banner_exact(banner_path))
+        if (art_banner_exact(banner_path, buf, size))
             continue;                       /* drawn as it is */
         if (*n_new == BANNER_MAX)
             break;                  /* full: the rest have no banner */

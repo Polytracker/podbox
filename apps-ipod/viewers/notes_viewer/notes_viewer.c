@@ -751,7 +751,7 @@ static bool nv_banner_exact(const char *page)
     if (!dot || (size_t)(dot - page) + 5 > sizeof(path))
         return false;
     snprintf(path, sizeof(path), "%.*s.jpg", (int)(dot - page), page);
-    return art_banner_exact(path)
+    return art_banner_exact(path, nv.work, nv.work_size)
            && art_banner_draw(path, nv.banner, nv.work, nv.work_size);
 }
 

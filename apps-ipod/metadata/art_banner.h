@@ -27,8 +27,9 @@
 bool art_banner_sweep(void *workbuf, size_t worksz, bool (*stop)(void));
 
 /* Whether the picture at `path` is a JPEG of exactly the banner's size,
- * which is drawn as it is rather than cached: art_banner_draw() */
-bool art_banner_exact(const char *path);
+ * which is drawn as it is rather than cached: art_banner_draw(). `buf`,
+ * `size` bytes, is a decoder's work area to read its header with. */
+bool art_banner_exact(const char *path, void *buf, size_t size);
 
 /* The exact-size picture at `path` decoded into `px`, a banner's pixels,
  * with `buf`, `size` bytes, to work in. False when it would not decode. */
