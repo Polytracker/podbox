@@ -2666,6 +2666,19 @@ static bool nv_build(const struct nv_req *r)
         if (line >= 0)
             nv.focus_line = line;
     }
+    /* Another of the album's pages, its Tracks, opened at the playing
+     * track's heading when it has one, that heading current */
+    else if (nv.doc.part && nv.doc.album >= 0)
+    {
+        nv_playing_changed();
+        for (i = 0; nv_playing >= 0 && i < nv.nlinks; i++)
+            if (nv.links[i].head && nv.links[i].t.track == nv_playing)
+            {
+                nv.cur = i;
+                nv.focus_line = nv.links[i].line;
+                break;
+            }
+    }
     notes_links_end();
     return true;
 
