@@ -156,6 +156,8 @@ struct nv_link
 {
     uint32_t off, end;
     int line, last;
+    bool head;                  /* a heading naming one of the album's
+                                   tracks, which plays it: no name marks */
     struct notes_target t;
 };
 
@@ -1143,7 +1145,7 @@ static void nv_link_lines(void)
 
         lk->line = nv_line_of(lk->off);
         lk->last = nv_line_of(lk->end - 3);
-        for (l = lk->line + 1; l <= lk->last; l++)
+        for (l = lk->line + 1; !lk->head && l <= lk->last; l++)
             nv.lines[l].link = k;
     }
 }
@@ -1254,6 +1256,7 @@ static bool nv_find_links(void)
         {
             k->off = off;
             k->end = close + 3;
+            k->head = false;
             nv.nlinks++;
         }
         else
@@ -1325,6 +1328,85 @@ static int nv_disc_heading(const char *p)
     while (*p >= '0' && *p <= '9')
         disc = disc * 10 + (*p++ - '0');
     return *p ? 0 : disc;
+}
+
+/* The track of the album row `row` (`album`) whose title's key is `key`,
+ * on disc `disc` when it is not 0: its entry, or -1 */
+static int nv_album_track(const struct tagcache_album *row, int album,
+                          uint32_t key, int disc)
+{
+    char title[NV_NAME_MAX];
+    int idx;
+
+    for (idx = row->first; idx <= row->last; idx++)
+    {
+        long dn = 0;
+
+        if (tagcache_album_of(idx) != album
+            || !tagcache_entry_string(idx, tag_title, title, sizeof(title))
+            || art_name_hash(title) != key)
+            continue;
+        tagcache_entry_numeric(idx, tag_discnumber, &dn);
+        if (!disc || MAX(dn, 1) == disc)
+            return idx;
+    }
+    return -1;
+}
+
+/* On an album's own pages, each heading that names one of its tracks made
+ * a link to the track, which plays it: a stop for the wheel, as a track
+ * row is. A heading holding a link of its own is left as it is. */
+static void nv_heading_links(void)
+{
+    struct tagcache_album row;
+    char text[NV_NAME_MAX];
+    int i, disc = 0;
+
+    if (nv.doc.album < 0 || !tagcache_album_get(nv.doc.album, &row))
+        return;
+    for (i = 0; i < nv.nlines && nv.nlinks < NV_LINKS_MAX; i++)
+    {
+        const unsigned char *s = nv.text + nv.lines[i].off;
+        uint32_t off = nv.lines[i].off, end;
+        int idx, k;
+        struct nv_link *lk;
+
+        if (!(nv.lines[i].flags & NV_HEAD) || memcmp(s, TL_HEAD_OPEN, 3))
+            continue;
+        nv_heading_text(i, text, sizeof(text));
+        if (nv_disc_heading(text))
+        {
+            disc = nv_disc_heading(text);
+            continue;
+        }
+        idx = nv_album_track(&row, nv.doc.album,
+                             art_name_hash(notes_numbered(text)), disc);
+        if (idx < 0)
+            continue;
+        for (end = off + 3; end + 3 <= nv.text_len; end++)
+            if (nv.text[end] == 0xee && nv.text[end + 1] == 0x80
+                && nv.text[end + 2] == 0x83)
+                break;
+        end = MIN(end + 3, nv.text_len);
+        for (k = 0; k < nv.nlinks && nv.links[k].off < off; k++)
+            ;
+        if (k < nv.nlinks && nv.links[k].off < end)
+            continue;
+        memmove(&nv.links[k + 1], &nv.links[k],
+                (nv.nlinks - k) * sizeof(nv.links[0]));
+        nv.nlinks++;
+        lk = &nv.links[k];
+        memset(lk, 0, sizeof(*lk));
+        lk->off = off;
+        lk->end = end;
+        lk->head = true;
+        lk->t.to = NOTES_TO_TRACK;
+        lk->t.page = -1;
+        lk->t.album = nv.doc.album;
+        lk->t.artist_seek = -1;
+        lk->t.track = idx;
+        lk->t.key = art_name_hash(text);
+    }
 }
 
 /* ---- drawing ----------------------------------------------------------- */
@@ -1443,14 +1525,18 @@ static void nv_draw_lines(void)
         int y = nv.text_top + l->y - nv.scroll;
         unsigned colour;
 
+        bool on = nv.cur >= 0 && i >= nv.links[nv.cur].line
+                  && i <= nv.links[nv.cur].last;
+
         tl.fg = (l->flags & NV_HEAD) ? nv.head : nv.fg;
+        if (on && nv.links[nv.cur].head)
+            tl.fg = nv.bg;              /* a track's heading, current */
         colour = (l->flags & NV_DIM) ? nv.dim : tl.fg;
         if (y + l->ln.height <= 0)
             continue;
         if (y >= LCD_HEIGHT - nv_foot())
             break;
-        if (nv.cur >= 0 && i >= nv.links[nv.cur].line
-            && i <= nv.links[nv.cur].last)
+        if (on)
             nv_draw_current(&tl, i, y);
         if (l->link >= 0)
             colour = l->link == nv.cur ? nv.bg : nv.accent;
@@ -1466,7 +1552,7 @@ static void nv_draw_lines(void)
             && (!tl.head_bold
                 || ((l->flags & NV_MINOR) && !tl.minor_bold)))
         {
-            d->set_foreground(nv.head);
+            d->set_foreground(tl.fg);
             d->hline(l->ln.indent, l->ln.indent + l->ln.width - 1,
                      MIN(y + l->ln.ascent + 2, y + l->ln.height - 1));
         }
@@ -2478,6 +2564,7 @@ static bool nv_build(const struct nv_req *r)
     nv_layout();
     if (nv_find_links())
         nv_layout();
+    nv_heading_links();
     nv_link_lines();
 
     /* A track: its section of the notes, else its row in the track list */
